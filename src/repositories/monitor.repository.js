@@ -1,37 +1,44 @@
 'use strict';
 
+const { getSchemaStatements, quoteIdentifier } = require('../database/schema');
+
 class MonitorRepository {
-  constructor({ client, database, table }) {
+  constructor({ client, database, tables }) {
     this.client = client;
     this.database = database;
-    this.table = table;
-    this.qualifiedTable = `\`${database}\`.\`${table}\``;
+    this.tables = tables;
+    this.qualifiedTables = Object.fromEntries(
+      Object.entries(tables).map(([category, table]) => [
+        category,
+        `${quoteIdentifier(database)}.${quoteIdentifier(table)}`,
+      ]),
+    );
   }
 
   async initialize() {
-    await this.client.command({
-      query: `
-        CREATE TABLE IF NOT EXISTS ${this.qualifiedTable}
-        (
-          event_id UUID,
-          received_at DateTime64(3, 'UTC'),
-          content_type LowCardinality(String),
-          source_ip String,
-          user_agent String,
-          payload String,
-          payload_size UInt64
-        )
-        ENGINE = MergeTree
-        ORDER BY (received_at, event_id)
-      `,
-    });
+    const statements = getSchemaStatements({ database: this.database, tables: this.tables });
+    for (const query of statements) {
+      await this.client.command({ query });
+    }
   }
 
-  async insert(event) {
+  async insert(category, event) {
+    return this.insertMany(category, [event]);
+  }
+
+  async insertMany(category, events) {
+    const table = this.qualifiedTables[category];
+    if (!table) {
+      throw new Error(`不支持的监控事件类型: ${category}`);
+    }
+
     await this.client.insert({
-      table: this.qualifiedTable,
-      values: [event],
+      table,
+      values: events,
       format: 'JSONEachRow',
+      clickhouse_settings: {
+        input_format_defaults_for_omitted_fields: 1,
+      },
     });
   }
 }

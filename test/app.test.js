@@ -4,14 +4,22 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const { createApp } = require('../src/app');
+const { MonitorService } = require('../src/services/monitor.service');
 
 const config = {
   app: { maxBodySize: '32b' },
-  clickhouse: { database: 'default', table: 'monitor_events' },
+  clickhouse: {
+    database: 'weils_monitor',
+    tables: {
+      performance: 'frontend_performance',
+      error: 'frontend_error',
+      behavior: 'frontend_behavior',
+    },
+  },
 };
 
-async function withServer(monitorService, callback) {
-  const server = createApp({ monitorService, config }).listen(0, '127.0.0.1');
+async function withServer(monitorService, callback, appConfig = config) {
+  const server = createApp({ monitorService, config: appConfig }).listen(0, '127.0.0.1');
   await once(server, 'listening');
   const { port } = server.address();
 
@@ -63,4 +71,52 @@ test('超过限制的数据返回 413', async () => {
     assert.equal(response.status, 413);
     assert.deepEqual(await response.json(), { ok: false, error: 'Payload too large' });
   });
+});
+
+test('POST /api/v1/monitor 接收批量信封并返回接收数量', async () => {
+  const writes = [];
+  const monitorService = new MonitorService({
+    async insertMany(category, events) {
+      writes.push({ category, events });
+    },
+  });
+  const batchConfig = {
+    ...config,
+    app: { maxBodySize: '5mb' },
+  };
+  const payload = {
+    app_id: 'web-portal',
+    sample_rate: 1,
+    sdk_version: '2.0.0',
+    send_time: 1712345679999,
+    events: [
+      {
+        event_id: 'd6dd3d25-5a95-41ba-acf5-83ac856b1125',
+        event_type: 'behavior',
+        timestamp: 1712345678901,
+        action: 'click',
+      },
+    ],
+  };
+
+  await withServer(
+    monitorService,
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/v1/monitor`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(body.eventCount, 1);
+      assert.deepEqual(body.eventIds, ['d6dd3d25-5a95-41ba-acf5-83ac856b1125']);
+      assert.equal(writes.length, 1);
+      assert.equal(writes[0].category, 'behavior');
+      assert.equal(writes[0].events[0].sdk_version, '2.0.0');
+    },
+    batchConfig,
+  );
 });

@@ -1,12 +1,12 @@
 'use strict';
 
-function createHealthController({ database, table }) {
+function createHealthController({ database, tables }) {
   return function health(_req, res) {
     res.status(200).json({
       service: 'monitor service',
       endpoint: 'POST /api/v1/monitor',
       storage: 'ClickHouse',
-      table: `${database}.${table}`,
+      tables: Object.values(tables).map((table) => `${database}.${table}`),
     });
   };
 }

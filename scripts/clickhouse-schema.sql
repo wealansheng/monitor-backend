@@ -1,245 +1,275 @@
--- weils_monitor frontend observability schema
--- All event timestamps are stored in UTC. Convert to the display timezone at query time.
+-- Schema derived from docs/字段要求.md.
+-- SDK timestamps are Unix epoch milliseconds. Query event_time for DateTime operations.
 
 CREATE DATABASE IF NOT EXISTS weils_monitor
 ENGINE = Atomic
 COMMENT 'Frontend observability data';
 
+-- event_type: performance, request, resource
 CREATE TABLE IF NOT EXISTS weils_monitor.frontend_performance
 (
-    -- Identity and time
+    -- Common fields
     event_id UUID DEFAULT generateUUIDv4(),
-    event_time DateTime64(3, 'UTC'),
+    event_type LowCardinality(String),
+    timestamp UInt64,
+    event_time DateTime64(3, 'UTC') MATERIALIZED
+        fromUnixTimestamp64Milli(toInt64(timestamp), 'UTC'),
     event_date Date MATERIALIZED toDate(event_time),
     received_at DateTime64(3, 'UTC') DEFAULT now64(3),
-
-    -- Application dimensions
-    project_id LowCardinality(String),
-    environment LowCardinality(String) DEFAULT 'production',
+    app_id LowCardinality(String),
     release LowCardinality(String) DEFAULT '',
-    sdk_name LowCardinality(String) DEFAULT 'web',
-    sdk_version LowCardinality(String) DEFAULT '',
-
-    -- User and page dimensions
+    environment LowCardinality(String) DEFAULT 'production',
     user_id String DEFAULT '',
-    anonymous_id String DEFAULT '',
     session_id String DEFAULT '',
-    trace_id String DEFAULT '',
     page_url String DEFAULT '',
-    page_path String DEFAULT '',
-    route_name LowCardinality(String) DEFAULT '',
+    route String DEFAULT '',
     referrer String DEFAULT '',
-
-    -- Client dimensions
+    device_type LowCardinality(String) DEFAULT '',
+    device_model LowCardinality(String) DEFAULT '',
     browser_name LowCardinality(String) DEFAULT '',
     browser_version LowCardinality(String) DEFAULT '',
     os_name LowCardinality(String) DEFAULT '',
     os_version LowCardinality(String) DEFAULT '',
-    device_type LowCardinality(String) DEFAULT '',
-    network_type LowCardinality(String) DEFAULT '',
+    network LowCardinality(String) DEFAULT '',
+    locale LowCardinality(String) DEFAULT '',
+    screen LowCardinality(String) DEFAULT '',
+    viewport LowCardinality(String) DEFAULT '',
+    sdk_version LowCardinality(String) DEFAULT '',
+    sample_rate Float64 DEFAULT 1,
+    send_time UInt64 DEFAULT 0,
+    trace_id String DEFAULT '',
+    client_ip String DEFAULT '',
+    user_agent String DEFAULT '',
 
-    -- Metric model. Examples: web_vital/LCP, navigation/TTFB, resource/duration.
-    performance_type LowCardinality(String),
-    metric_name LowCardinality(String),
-    metric_value Float64,
-    metric_unit LowCardinality(String) DEFAULT 'ms',
+    -- Core Web Vitals and runtime performance
+    metric_name LowCardinality(String) DEFAULT '',
+    value Float64 DEFAULT 0,
     rating LowCardinality(String) DEFAULT '',
-    navigation_type LowCardinality(String) DEFAULT '',
+    start_time Float64 DEFAULT 0,
 
-    -- Resource timing fields; empty/zero for non-resource metrics.
-    resource_url String DEFAULT '',
+    -- Navigation timing, in milliseconds
+    dns Float64 DEFAULT 0,
+    tcp Float64 DEFAULT 0,
+    ssl Float64 DEFAULT 0,
+    request Float64 DEFAULT 0,
+    response Float64 DEFAULT 0,
+    dom_ready Float64 DEFAULT 0,
+    load Float64 DEFAULT 0,
+
+    -- Resource timing metric fields
+    name String DEFAULT '',
     initiator_type LowCardinality(String) DEFAULT '',
-    protocol LowCardinality(String) DEFAULT '',
-    http_status UInt16 DEFAULT 0,
-    start_time_ms Float64 DEFAULT 0,
-    duration_ms Float64 DEFAULT 0,
+    duration Float64 DEFAULT 0,
     transfer_size UInt64 DEFAULT 0,
     encoded_body_size UInt64 DEFAULT 0,
-    decoded_body_size UInt64 DEFAULT 0,
 
-    -- Sampling and extensibility
-    sample_rate Float32 DEFAULT 1,
-    tags Map(String, String) DEFAULT map(),
-    attribution_json String DEFAULT '{}' CODEC(ZSTD(3)),
+    -- Request event fields
+    url String DEFAULT '',
+    method LowCardinality(String) DEFAULT '',
+    status_code UInt16 DEFAULT 0,
+    request_size UInt64 DEFAULT 0,
+    response_size UInt64 DEFAULT 0,
+    success UInt8 DEFAULT 0,
+    request_body String DEFAULT '' CODEC(ZSTD(3)),
+    response_body String DEFAULT '' CODEC(ZSTD(3)),
+
+    -- Standalone resource event fields
+    resource_url String DEFAULT '',
+    resource_type LowCardinality(String) DEFAULT '',
+    cached UInt8 DEFAULT 0,
+    status UInt16 DEFAULT 0,
 
     INDEX idx_performance_session session_id TYPE bloom_filter(0.01) GRANULARITY 4,
-    INDEX idx_performance_page page_path TYPE bloom_filter(0.01) GRANULARITY 4,
-    INDEX idx_performance_trace trace_id TYPE bloom_filter(0.01) GRANULARITY 4
+    INDEX idx_performance_trace trace_id TYPE bloom_filter(0.01) GRANULARITY 4,
+    INDEX idx_performance_route route TYPE bloom_filter(0.01) GRANULARITY 4
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(event_date)
 ORDER BY
 (
-    project_id,
+    app_id,
     environment,
     event_date,
-    performance_type,
+    event_type,
     metric_name,
     event_time,
     event_id
 )
 TTL event_time + INTERVAL 90 DAY DELETE
 SETTINGS index_granularity = 8192
-COMMENT 'Web Vitals, navigation timing, resource timing and custom frontend metrics';
+COMMENT 'Performance, request and resource events';
 
+ALTER TABLE weils_monitor.frontend_performance
+    ADD COLUMN IF NOT EXISTS sample_rate Float64 DEFAULT 1 AFTER sdk_version;
+ALTER TABLE weils_monitor.frontend_performance
+    ADD COLUMN IF NOT EXISTS send_time UInt64 DEFAULT 0 AFTER sample_rate;
+ALTER TABLE weils_monitor.frontend_performance
+    MODIFY COLUMN start_time Float64 DEFAULT 0;
+
+-- event_type: error, stability
 CREATE TABLE IF NOT EXISTS weils_monitor.frontend_error
 (
-    -- Identity and time
+    -- Common fields
     event_id UUID DEFAULT generateUUIDv4(),
-    event_time DateTime64(3, 'UTC'),
+    event_type LowCardinality(String),
+    timestamp UInt64,
+    event_time DateTime64(3, 'UTC') MATERIALIZED
+        fromUnixTimestamp64Milli(toInt64(timestamp), 'UTC'),
     event_date Date MATERIALIZED toDate(event_time),
     received_at DateTime64(3, 'UTC') DEFAULT now64(3),
-
-    -- Application dimensions
-    project_id LowCardinality(String),
-    environment LowCardinality(String) DEFAULT 'production',
+    app_id LowCardinality(String),
     release LowCardinality(String) DEFAULT '',
-    sdk_name LowCardinality(String) DEFAULT 'web',
-    sdk_version LowCardinality(String) DEFAULT '',
-
-    -- User and page dimensions
+    environment LowCardinality(String) DEFAULT 'production',
     user_id String DEFAULT '',
-    anonymous_id String DEFAULT '',
     session_id String DEFAULT '',
-    trace_id String DEFAULT '',
     page_url String DEFAULT '',
-    page_path String DEFAULT '',
-    route_name LowCardinality(String) DEFAULT '',
-
-    -- Client dimensions
+    route String DEFAULT '',
+    referrer String DEFAULT '',
+    device_type LowCardinality(String) DEFAULT '',
+    device_model LowCardinality(String) DEFAULT '',
     browser_name LowCardinality(String) DEFAULT '',
     browser_version LowCardinality(String) DEFAULT '',
     os_name LowCardinality(String) DEFAULT '',
     os_version LowCardinality(String) DEFAULT '',
-    device_type LowCardinality(String) DEFAULT '',
+    network LowCardinality(String) DEFAULT '',
+    locale LowCardinality(String) DEFAULT '',
+    screen LowCardinality(String) DEFAULT '',
+    viewport LowCardinality(String) DEFAULT '',
+    sdk_version LowCardinality(String) DEFAULT '',
+    sample_rate Float64 DEFAULT 1,
+    send_time UInt64 DEFAULT 0,
+    trace_id String DEFAULT '',
+    client_ip String DEFAULT '',
+    user_agent String DEFAULT '',
 
-    -- Error details
-    error_type LowCardinality(String),
-    error_level LowCardinality(String) DEFAULT 'error',
-    error_name LowCardinality(String) DEFAULT '',
-    message String,
-    stack_trace String DEFAULT '' CODEC(ZSTD(3)),
-    source LowCardinality(String) DEFAULT '',
-    file_name String DEFAULT '',
-    line_number UInt32 DEFAULT 0,
-    column_number UInt32 DEFAULT 0,
-    component_name LowCardinality(String) DEFAULT '',
-    handled UInt8 DEFAULT 0,
-
-    -- HTTP/resource error details; empty/zero for JavaScript errors.
-    request_url String DEFAULT '',
-    request_method LowCardinality(String) DEFAULT '',
-    http_status UInt16 DEFAULT 0,
-    request_duration_ms Float64 DEFAULT 0,
-
-    -- The SDK may provide a stable grouping key. Otherwise core fields are hashed.
+    -- JavaScript, Promise, resource, HTTP, framework and business errors
+    error_type LowCardinality(String) DEFAULT '',
+    message String DEFAULT '',
+    name LowCardinality(String) DEFAULT '',
+    stack String DEFAULT '' CODEC(ZSTD(3)),
+    filename String DEFAULT '',
+    lineno UInt32 DEFAULT 0,
+    colno UInt32 DEFAULT 0,
+    component LowCardinality(String) DEFAULT '',
+    component_stack String DEFAULT '' CODEC(ZSTD(3)),
+    props String DEFAULT '{}' CODEC(ZSTD(3)),
+    reason String DEFAULT '',
+    resource_url String DEFAULT '',
+    resource_type LowCardinality(String) DEFAULT '',
+    tag_name LowCardinality(String) DEFAULT '',
+    url String DEFAULT '',
+    method LowCardinality(String) DEFAULT '',
+    status_code UInt16 DEFAULT 0,
+    response_body String DEFAULT '' CODEC(ZSTD(3)),
+    duration Float64 DEFAULT 0,
+    breadcrumbs String DEFAULT '[]' CODEC(ZSTD(3)),
+    tags Map(String, String) DEFAULT map(),
+    extra String DEFAULT '{}' CODEC(ZSTD(3)),
     fingerprint String DEFAULT '',
     fingerprint_hash UInt64 MATERIALIZED
         if(
             empty(fingerprint),
-            cityHash64(concat(error_type, '|', error_name, '|', message, '|', file_name)),
+            cityHash64(concat(error_type, '|', name, '|', message, '|', filename)),
             cityHash64(fingerprint)
         ),
 
-    -- Sampling, debugging context and extensibility
-    sample_rate Float32 DEFAULT 1,
-    tags Map(String, String) DEFAULT map(),
-    breadcrumbs_json String DEFAULT '[]' CODEC(ZSTD(3)),
-    context_json String DEFAULT '{}' CODEC(ZSTD(3)),
+    -- Blank screen, crash and other stability events
+    issue_type LowCardinality(String) DEFAULT '',
+    blank_time UInt64 DEFAULT 0,
+    root_node_count UInt32 DEFAULT 0,
 
     INDEX idx_error_session session_id TYPE bloom_filter(0.01) GRANULARITY 4,
     INDEX idx_error_trace trace_id TYPE bloom_filter(0.01) GRANULARITY 4,
-    INDEX idx_error_page page_path TYPE bloom_filter(0.01) GRANULARITY 4
+    INDEX idx_error_route route TYPE bloom_filter(0.01) GRANULARITY 4
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(event_date)
 ORDER BY
 (
-    project_id,
+    app_id,
     environment,
     event_date,
+    event_type,
     fingerprint_hash,
     event_time,
     event_id
 )
 TTL event_time + INTERVAL 180 DAY DELETE
 SETTINGS index_granularity = 8192
-COMMENT 'JavaScript, promise, framework, resource and HTTP frontend errors';
+COMMENT 'Error and stability events';
 
+ALTER TABLE weils_monitor.frontend_error
+    ADD COLUMN IF NOT EXISTS sample_rate Float64 DEFAULT 1 AFTER sdk_version;
+ALTER TABLE weils_monitor.frontend_error
+    ADD COLUMN IF NOT EXISTS send_time UInt64 DEFAULT 0 AFTER sample_rate;
+
+-- event_type: behavior
 CREATE TABLE IF NOT EXISTS weils_monitor.frontend_behavior
 (
-    -- Identity and time
+    -- Common fields
     event_id UUID DEFAULT generateUUIDv4(),
-    event_time DateTime64(3, 'UTC'),
+    event_type LowCardinality(String),
+    timestamp UInt64,
+    event_time DateTime64(3, 'UTC') MATERIALIZED
+        fromUnixTimestamp64Milli(toInt64(timestamp), 'UTC'),
     event_date Date MATERIALIZED toDate(event_time),
     received_at DateTime64(3, 'UTC') DEFAULT now64(3),
-    sequence_no UInt32 DEFAULT 0,
-
-    -- Application dimensions
-    project_id LowCardinality(String),
-    environment LowCardinality(String) DEFAULT 'production',
+    app_id LowCardinality(String),
     release LowCardinality(String) DEFAULT '',
-    sdk_name LowCardinality(String) DEFAULT 'web',
-    sdk_version LowCardinality(String) DEFAULT '',
-
-    -- User and page dimensions
+    environment LowCardinality(String) DEFAULT 'production',
     user_id String DEFAULT '',
-    anonymous_id String DEFAULT '',
-    session_id String,
-    trace_id String DEFAULT '',
+    session_id String DEFAULT '',
     page_url String DEFAULT '',
-    page_path String DEFAULT '',
-    route_name LowCardinality(String) DEFAULT '',
+    route String DEFAULT '',
     referrer String DEFAULT '',
-
-    -- Client dimensions
+    device_type LowCardinality(String) DEFAULT '',
+    device_model LowCardinality(String) DEFAULT '',
     browser_name LowCardinality(String) DEFAULT '',
     browser_version LowCardinality(String) DEFAULT '',
     os_name LowCardinality(String) DEFAULT '',
     os_version LowCardinality(String) DEFAULT '',
-    device_type LowCardinality(String) DEFAULT '',
+    network LowCardinality(String) DEFAULT '',
+    locale LowCardinality(String) DEFAULT '',
+    screen LowCardinality(String) DEFAULT '',
+    viewport LowCardinality(String) DEFAULT '',
+    sdk_version LowCardinality(String) DEFAULT '',
+    sample_rate Float64 DEFAULT 1,
+    send_time UInt64 DEFAULT 0,
+    trace_id String DEFAULT '',
+    client_ip String DEFAULT '',
+    user_agent String DEFAULT '',
 
-    -- Behavior details. Examples: page_view, click, input, scroll, route_change, custom.
-    behavior_type LowCardinality(String),
-    event_name LowCardinality(String) DEFAULT '',
-    element_tag LowCardinality(String) DEFAULT '',
-    element_id String DEFAULT '',
-    element_selector String DEFAULT '',
-    element_text String DEFAULT '',
-    field_name String DEFAULT '',
-    input_type LowCardinality(String) DEFAULT '',
-    from_url String DEFAULT '',
-    to_url String DEFAULT '',
-
-    -- Coordinates and duration; zero when not applicable.
-    client_x Int32 DEFAULT 0,
-    client_y Int32 DEFAULT 0,
-    scroll_x Int32 DEFAULT 0,
-    scroll_y Int32 DEFAULT 0,
-    viewport_width UInt32 DEFAULT 0,
-    viewport_height UInt32 DEFAULT 0,
-    duration_ms Float64 DEFAULT 0,
-
-    -- Sampling and extensibility. Never store passwords or raw form values.
-    sample_rate Float32 DEFAULT 1,
-    tags Map(String, String) DEFAULT map(),
-    properties_json String DEFAULT '{}' CODEC(ZSTD(3)),
+    -- Page views, route changes, interactions and custom business behavior
+    action LowCardinality(String),
+    from_route String DEFAULT '',
+    to_route String DEFAULT '',
+    duration Float64 DEFAULT 0,
+    target_selector String DEFAULT '',
+    target_text String DEFAULT '',
+    target_tag LowCardinality(String) DEFAULT '',
+    category LowCardinality(String) DEFAULT '',
+    properties String DEFAULT '{}' CODEC(ZSTD(3)),
 
     INDEX idx_behavior_session session_id TYPE bloom_filter(0.01) GRANULARITY 1,
     INDEX idx_behavior_user user_id TYPE bloom_filter(0.01) GRANULARITY 4,
-    INDEX idx_behavior_page page_path TYPE bloom_filter(0.01) GRANULARITY 4
+    INDEX idx_behavior_route route TYPE bloom_filter(0.01) GRANULARITY 4
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(event_date)
 ORDER BY
 (
-    project_id,
+    app_id,
     environment,
     event_date,
-    behavior_type,
+    action,
     event_time,
     event_id
 )
 TTL event_time + INTERVAL 30 DAY DELETE
 SETTINGS index_granularity = 8192
-COMMENT 'Page views, clicks, route changes, scrolls and privacy-safe custom behavior events';
+COMMENT 'Behavior events';
+
+ALTER TABLE weils_monitor.frontend_behavior
+    ADD COLUMN IF NOT EXISTS sample_rate Float64 DEFAULT 1 AFTER sdk_version;
+ALTER TABLE weils_monitor.frontend_behavior
+    ADD COLUMN IF NOT EXISTS send_time UInt64 DEFAULT 0 AFTER sample_rate;

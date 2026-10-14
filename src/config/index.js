@@ -29,7 +29,20 @@ function loadConfig(env = process.env) {
       username: assertIdentifier('CLICKHOUSE_USERNAME', env.CLICKHOUSE_USERNAME || 'weils'),
       password: env.CLICKHOUSE_PASSWORD || '123456',
       database: assertIdentifier('CLICKHOUSE_DATABASE', env.CLICKHOUSE_DATABASE || 'weils_monitor'),
-      table: assertIdentifier('CLICKHOUSE_TABLE', env.CLICKHOUSE_TABLE || 'monitor_events'),
+      tables: {
+        performance: assertIdentifier(
+          'CLICKHOUSE_PERFORMANCE_TABLE',
+          env.CLICKHOUSE_PERFORMANCE_TABLE || 'frontend_performance',
+        ),
+        error: assertIdentifier(
+          'CLICKHOUSE_ERROR_TABLE',
+          env.CLICKHOUSE_ERROR_TABLE || 'frontend_error',
+        ),
+        behavior: assertIdentifier(
+          'CLICKHOUSE_BEHAVIOR_TABLE',
+          env.CLICKHOUSE_BEHAVIOR_TABLE || 'frontend_behavior',
+        ),
+      },
       autoMigrate: env.CLICKHOUSE_AUTO_MIGRATE === 'true',
       adminUsername: env.CLICKHOUSE_ADMIN_USERNAME || 'default',
       adminPassword: env.CLICKHOUSE_ADMIN_PASSWORD || '',

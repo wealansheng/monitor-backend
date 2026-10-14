@@ -12,12 +12,11 @@ async function start() {
     url: config.clickhouse.url,
     username: config.clickhouse.username,
     password: config.clickhouse.password,
-    database: config.clickhouse.database,
   });
   const repository = new MonitorRepository({
     client,
     database: config.clickhouse.database,
-    table: config.clickhouse.table,
+    tables: config.clickhouse.tables,
   });
 
   if (config.clickhouse.autoMigrate) {
@@ -34,7 +33,9 @@ async function start() {
   const server = app.listen(config.app.port, config.app.host, () => {
     console.log(`服务已启动: http://${config.app.host}:${config.app.port}`);
     console.log(`上报接口:   POST http://${config.app.host}:${config.app.port}/api/v1/monitor`);
-    console.log(`数据表:     ${config.clickhouse.database}.${config.clickhouse.table}`);
+    for (const table of Object.values(config.clickhouse.tables)) {
+      console.log(`数据表:     ${config.clickhouse.database}.${table}`);
+    }
   });
 
   async function shutdown(signal) {
