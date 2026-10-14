@@ -1,0 +1,20 @@
+{
+  "name": "monitor-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "基于 Express 和 ClickHouse 的监控数据接收服务",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "db:init": "node scripts/init-clickhouse.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@clickhouse/client": "^1.0.0",
+    "express": "^5.0.0"
+  }
+}
