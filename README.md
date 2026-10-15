@@ -29,14 +29,12 @@ npm run db:init
 npm start
 ```
 
-`db:init` 使用管理员账号创建数据库和表，并给应用账号授予最小化的 `INSERT` 权限。默认管理员账号为本机 `default` 用户；其他环境请设置 `CLICKHOUSE_ADMIN_USERNAME` 和 `CLICKHOUSE_ADMIN_PASSWORD`。应用启动时只检查连接，不要求应用账号具有建表权限。若部署环境明确给应用账号授予了 DDL 权限，也可设置 `CLICKHOUSE_AUTO_MIGRATE=true` 让应用启动时自动建表。
+`db:init` 创建数据库和表。应用启动时只检查连接；若数据库允许应用执行 DDL，也可设置 `CLICKHOUSE_AUTO_MIGRATE=true`，让应用启动时自动建表。数据库连接不再传入用户名和密码，需确保 ClickHouse 接受客户端的默认连接方式。
 
 默认配置：
 
 - 服务：`http://localhost:8888`
 - ClickHouse：`http://localhost:8123`
-- 用户名：`weils`
-- 密码：`123456`
 - 数据库：`weils_monitor`
 - 性能表：`frontend_performance`
 - 错误表：`frontend_error`
@@ -52,7 +50,8 @@ npm start
 
 可执行 DDL 见 [`scripts/clickhouse-schema.sql`](scripts/clickhouse-schema.sql)，字段说明、保留策略、隐私约束和查询示例见 [`docs/clickhouse-schema.md`](docs/clickhouse-schema.md)。字段协议以 [`docs/字段要求.md`](docs/字段要求.md) 为准；接口同时兼容单事件和 `events` 批量信封。上报请求通过 `event_type` 路由，`performance/request/resource` 写性能表，`error/stability` 写错误表，`behavior` 写行为表。
 
-生产环境建议通过环境变量覆盖配置，变量清单见 `.env.example`，尤其不要继续使用示例密码。
+生产环境建议通过环境变量覆盖配置，变量清单见 `.env.example`。
+本地开发可以在仓库根目录创建被 Git 忽略的 `.env`；服务启动时会读取它，已有进程环境变量优先。
 
 ## 文档
 

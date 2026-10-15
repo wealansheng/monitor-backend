@@ -22,10 +22,8 @@ async function start() {
   if (config.clickhouse.autoMigrate) {
     await repository.initialize();
   } else {
-    const pingResult = await client.ping();
-    if (!pingResult.success) {
-      throw pingResult.error || new Error('ClickHouse 连接失败');
-    }
+    const result = await client.query({ query: 'SELECT 1', format: 'JSONEachRow' });
+    await result.json();
   }
 
   const monitorService = new MonitorService(repository);

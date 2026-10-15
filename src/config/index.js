@@ -1,5 +1,7 @@
 'use strict';
 
+const { readLocalEnv } = require('./local-env');
+
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function parsePort(value) {
@@ -18,6 +20,8 @@ function assertIdentifier(name, value) {
 }
 
 function loadConfig(env = process.env) {
+  // The process environment overrides local development values.
+  if (env === process.env) env = { ...readLocalEnv(), ...env };
   return {
     app: {
       host: env.HOST || 'localhost',
@@ -26,7 +30,7 @@ function loadConfig(env = process.env) {
     },
     clickhouse: {
       url: env.CLICKHOUSE_URL || 'http://localhost:8123',
-      username: assertIdentifier('CLICKHOUSE_USERNAME', env.CLICKHOUSE_USERNAME || 'weils'),
+      username: assertIdentifier('CLICKHOUSE_USERNAME', env.CLICKHOUSE_USERNAME || 'root'),
       password: env.CLICKHOUSE_PASSWORD || '123456',
       database: assertIdentifier('CLICKHOUSE_DATABASE', env.CLICKHOUSE_DATABASE || 'weils_monitor'),
       tables: {
@@ -44,8 +48,11 @@ function loadConfig(env = process.env) {
         ),
       },
       autoMigrate: env.CLICKHOUSE_AUTO_MIGRATE === 'true',
-      adminUsername: env.CLICKHOUSE_ADMIN_USERNAME || 'default',
-      adminPassword: env.CLICKHOUSE_ADMIN_PASSWORD || '',
+      adminUsername: assertIdentifier(
+        'CLICKHOUSE_ADMIN_USERNAME',
+        env.CLICKHOUSE_ADMIN_USERNAME || env.CLICKHOUSE_USERNAME || 'root',
+      ),
+      adminPassword: env.CLICKHOUSE_ADMIN_PASSWORD || env.CLICKHOUSE_PASSWORD || '123456',
     },
   };
 }
