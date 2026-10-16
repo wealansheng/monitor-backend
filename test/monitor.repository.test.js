@@ -28,7 +28,7 @@ test('数据层创建表并写入 ClickHouse', async () => {
   await repository.initialize();
   await repository.insertMany('error', [{ event_id: 'id-1' }, { event_id: 'id-2' }]);
 
-  assert.equal(createQueries.length, 11);
+  assert.equal(createQueries.length, 14);
   assert.match(createQueries[0], /CREATE DATABASE IF NOT EXISTS `weils_monitor`/);
   assert.match(createQueries[1], /CREATE TABLE IF NOT EXISTS `weils_monitor`\.`frontend_performance`/);
   assert.ok(
@@ -48,6 +48,16 @@ test('数据层创建表并写入 ClickHouse', async () => {
       ),
     ),
   );
+  for (const table of ['frontend_performance', 'frontend_error', 'frontend_behavior']) {
+    assert.ok(createQueries.some((query) =>
+      query.includes(`CREATE TABLE IF NOT EXISTS \`weils_monitor\`.\`${table}\``) &&
+      query.includes("project_name LowCardinality(String) DEFAULT ''"),
+    ));
+    assert.ok(createQueries.some((query) =>
+      query.includes(`ALTER TABLE \`weils_monitor\`.\`${table}\``) &&
+      query.includes("ADD COLUMN IF NOT EXISTS project_name LowCardinality(String) DEFAULT ''"),
+    ));
+  }
   assert.ok(
     createQueries.some((query) =>
       /ALTER TABLE `weils_monitor`\.`frontend_performance`[\s\S]*MODIFY COLUMN start_time Float64/.test(

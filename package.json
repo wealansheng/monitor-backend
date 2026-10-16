@@ -8,6 +8,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "db:init": "node scripts/init-clickhouse.js",
+    "sourcemaps:upload": "node scripts/upload-sourcemaps.js",
     "test": "node --test"
   },
   "engines": {
@@ -15,6 +16,7 @@
   },
   "dependencies": {
     "@clickhouse/client": "^1.0.0",
+    "@jridgewell/trace-mapping": "^0.3.31",
     "express": "^5.0.0"
   }
 }

@@ -24,6 +24,7 @@
 | `timestamp` | `UInt64` | Unix 毫秒时间戳 |
 | — | `event_time DateTime64(3, 'UTC')` | 从 `timestamp` 生成，用于时间查询和 TTL |
 | `app_id` / `app_key` | `app_id LowCardinality(String)` | 服务端兼容两个输入名称 |
+| `projectName` / `project_name` | `project_name LowCardinality(String)`，默认 `''` | 项目名称；批量上报时可从信封继承 |
 | `release`、`environment` | `LowCardinality(String)` | 版本和环境维度 |
 | `user_id`、`session_id` | `String` | 用户需脱敏 |
 | `page_url`、`route`、`referrer` | `String` | 页面和路由信息 |

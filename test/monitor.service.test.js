@@ -36,6 +36,7 @@ test('性能事件按字段规范写入性能表并展开客户端对象', async
     event_type: 'performance',
     timestamp: 1712345678901,
     app_id: 'web-portal',
+    project_name: 'monitor-console',
     metric_name: 'LCP',
     value: 1800,
     device: { type: 'mobile', model: 'iPhone 14' },
@@ -48,6 +49,7 @@ test('性能事件按字段规范写入性能表并展开客户端对象', async
   assert.equal(result.eventId, EVENT_ID);
   assert.equal(result.eventType, 'performance');
   assert.equal(captured.category, 'performance');
+  assert.equal(captured.event.project_name, 'monitor-console');
   assert.equal(captured.event.metric_name, 'LCP');
   assert.equal(captured.event.device_type, 'mobile');
   assert.equal(captured.event.browser_name, 'Chrome');
@@ -146,6 +148,7 @@ test('批量上报继承信封字段，并按目标表批量写入', async () =>
   const result = await service.receive(
     requestData({
       app_id: 'web-portal',
+      project_name: 'default-project',
       sample_rate: 0.5,
       sdk_version: '2.0.0',
       send_time: 1712345679999,
@@ -155,6 +158,7 @@ test('批量上报继承信封字段，并按目标表批量写入', async () =>
           event_type: 'behavior',
           timestamp: 1712345678901,
           action: 'click',
+          project_name: 'behavior-project',
           browser: { name: 'Chrome', version: '120' },
         },
         {
@@ -172,7 +176,10 @@ test('批量上报继承信封字段，并按目标表批量写入', async () =>
   assert.equal(result.eventCount, 2);
   assert.equal(captured.batches.length, 2);
   const behavior = captured.batches.find((batch) => batch.category === 'behavior').events[0];
+  const error = captured.batches.find((batch) => batch.category === 'error').events[0];
   assert.equal(behavior.app_id, 'web-portal');
+  assert.equal(behavior.project_name, 'behavior-project');
+  assert.equal(error.project_name, 'default-project');
   assert.equal(behavior.sample_rate, 0.5);
   assert.equal(behavior.sdk_version, '2.0.0');
   assert.equal(behavior.send_time, 1712345679999);
@@ -255,4 +262,65 @@ test('拒绝非法的批量元数据和空 events', async () => {
     service.receive(requestData({ app_id: 'web-portal', events: [] })),
     /events must be a non-empty array/,
   );
+});
+
+test('拒绝无效的 project_name 且不写入数据层', async () => {
+  const service = new MonitorService({
+    async insertMany() {
+      assert.fail('不应写入数据层');
+    },
+  });
+
+  await assert.rejects(
+    service.receive(requestData({
+      event_id: EVENT_ID,
+      event_type: 'behavior',
+      timestamp: 1712345678901,
+      app_id: 'web-portal',
+      project_name: '  ',
+      action: 'click',
+    })),
+    /project_name must be a non-empty string/,
+  );
+});
+
+test('单事件将前端 projectName 写入 project_name', async () => {
+  const { service, captured } = createCapturingService();
+  await service.receive(requestData({
+    app_id: 'web-portal',
+    event_id: EVENT_ID,
+    event_type: 'behavior',
+    timestamp: 1712345678901,
+    projectName: 'frontend-project',
+    action: 'click',
+  }));
+
+  assert.equal(captured.event.project_name, 'frontend-project');
+  assert.equal(Object.hasOwn(captured.event, 'projectName'), false);
+});
+
+test('批量上报继承 projectName，事件可覆盖信封值', async () => {
+  const { service, captured } = createCapturingService();
+  await service.receive(requestData({
+    app_id: 'web-portal',
+    projectName: 'envelope-project',
+    events: [
+      {
+        event_id: EVENT_ID,
+        event_type: 'behavior',
+        timestamp: 1712345678901,
+        action: 'click',
+        data: { projectName: 'event-project' },
+      },
+      {
+        event_id: 'd6dd3d25-5a95-41ba-acf5-83ac856b1125',
+        event_type: 'behavior',
+        timestamp: 1712345678902,
+        action: 'page_view',
+      },
+    ],
+  }));
+
+  assert.equal(captured.batches[0].events[0].project_name, 'event-project');
+  assert.equal(captured.batches[0].events[1].project_name, 'envelope-project');
 });

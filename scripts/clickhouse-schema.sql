@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS weils_monitor.frontend_performance
     event_date Date MATERIALIZED toDate(event_time),
     received_at DateTime64(3, 'UTC') DEFAULT now64(3),
     app_id LowCardinality(String),
+    project_name LowCardinality(String) DEFAULT '',
     release LowCardinality(String) DEFAULT '',
     environment LowCardinality(String) DEFAULT 'production',
     user_id String DEFAULT '',
@@ -100,6 +101,8 @@ SETTINGS index_granularity = 8192
 COMMENT 'Performance, request and resource events';
 
 ALTER TABLE weils_monitor.frontend_performance
+    ADD COLUMN IF NOT EXISTS project_name LowCardinality(String) DEFAULT '' AFTER app_id;
+ALTER TABLE weils_monitor.frontend_performance
     ADD COLUMN IF NOT EXISTS sample_rate Float64 DEFAULT 1 AFTER sdk_version;
 ALTER TABLE weils_monitor.frontend_performance
     ADD COLUMN IF NOT EXISTS send_time UInt64 DEFAULT 0 AFTER sample_rate;
@@ -118,6 +121,7 @@ CREATE TABLE IF NOT EXISTS weils_monitor.frontend_error
     event_date Date MATERIALIZED toDate(event_time),
     received_at DateTime64(3, 'UTC') DEFAULT now64(3),
     app_id LowCardinality(String),
+    project_name LowCardinality(String) DEFAULT '',
     release LowCardinality(String) DEFAULT '',
     environment LowCardinality(String) DEFAULT 'production',
     user_id String DEFAULT '',
@@ -199,6 +203,8 @@ SETTINGS index_granularity = 8192
 COMMENT 'Error and stability events';
 
 ALTER TABLE weils_monitor.frontend_error
+    ADD COLUMN IF NOT EXISTS project_name LowCardinality(String) DEFAULT '' AFTER app_id;
+ALTER TABLE weils_monitor.frontend_error
     ADD COLUMN IF NOT EXISTS sample_rate Float64 DEFAULT 1 AFTER sdk_version;
 ALTER TABLE weils_monitor.frontend_error
     ADD COLUMN IF NOT EXISTS send_time UInt64 DEFAULT 0 AFTER sample_rate;
@@ -215,6 +221,7 @@ CREATE TABLE IF NOT EXISTS weils_monitor.frontend_behavior
     event_date Date MATERIALIZED toDate(event_time),
     received_at DateTime64(3, 'UTC') DEFAULT now64(3),
     app_id LowCardinality(String),
+    project_name LowCardinality(String) DEFAULT '',
     release LowCardinality(String) DEFAULT '',
     environment LowCardinality(String) DEFAULT 'production',
     user_id String DEFAULT '',
@@ -269,6 +276,8 @@ TTL event_time + INTERVAL 30 DAY DELETE
 SETTINGS index_granularity = 8192
 COMMENT 'Behavior events';
 
+ALTER TABLE weils_monitor.frontend_behavior
+    ADD COLUMN IF NOT EXISTS project_name LowCardinality(String) DEFAULT '' AFTER app_id;
 ALTER TABLE weils_monitor.frontend_behavior
     ADD COLUMN IF NOT EXISTS sample_rate Float64 DEFAULT 1 AFTER sdk_version;
 ALTER TABLE weils_monitor.frontend_behavior

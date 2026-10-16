@@ -13,6 +13,7 @@ const EVENT_TABLE = Object.freeze({
 
 const COMMON_FIELDS = [
   'app_id',
+  'project_name',
   'release',
   'environment',
   'user_id',
@@ -100,6 +101,7 @@ const TABLE_FIELDS = {
 };
 
 const FIELD_ALIASES = Object.freeze({
+  projectName: 'project_name',
   initiatorType: 'initiator_type',
   transferSize: 'transfer_size',
   encodedBodySize: 'encoded_body_size',
@@ -183,6 +185,8 @@ function expandEvents(envelope) {
   const batchFields = expandEnvelope({
     app_id: envelope.app_id,
     app_key: envelope.app_key,
+    project_name: envelope.project_name,
+    projectName: envelope.projectName,
     sample_rate: envelope.sample_rate,
     sdk_version: envelope.sdk_version,
     sdk_verion: envelope.sdk_verion,
@@ -194,7 +198,7 @@ function expandEvents(envelope) {
     if (event === null || Array.isArray(event) || typeof event !== 'object') {
       throw new AppError(400, `events[${index}] must be an object`);
     }
-    return expandEnvelope({ ...batchFields, ...event });
+    return { ...batchFields, ...expandEnvelope(event) };
   });
 
   return { isBatch: true, payloads };
@@ -212,6 +216,12 @@ function assertCommonFields(payload) {
   }
   if (typeof payload.app_id !== 'string' || payload.app_id.trim() === '') {
     throw new AppError(400, 'app_id is required');
+  }
+  if (
+    payload.project_name !== undefined &&
+    (typeof payload.project_name !== 'string' || payload.project_name.trim() === '')
+  ) {
+    throw new AppError(400, 'project_name must be a non-empty string');
   }
 
   const timestamp = Number(payload.timestamp);

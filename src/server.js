@@ -5,6 +5,8 @@ const { createApp } = require('./app');
 const { loadConfig } = require('./config');
 const { MonitorRepository } = require('./repositories/monitor.repository');
 const { MonitorService } = require('./services/monitor.service');
+const { SourceMapService } = require('./services/sourcemap.service');
+const { DashboardService } = require('./services/dashboard.service');
 
 async function start() {
   const config = loadConfig();
@@ -27,7 +29,11 @@ async function start() {
   }
 
   const monitorService = new MonitorService(repository);
-  const app = createApp({ monitorService, config });
+  const sourceMapService = config.sourceMaps.token
+    ? new SourceMapService({ directory: config.sourceMaps.directory, repository })
+    : undefined;
+  const dashboardService = config.dashboard.token ? new DashboardService(repository) : undefined;
+  const app = createApp({ monitorService, sourceMapService, dashboardService, config });
   const server = app.listen(config.app.port, config.app.host, () => {
     console.log(`服务已启动: http://${config.app.host}:${config.app.port}`);
     console.log(`上报接口:   POST http://${config.app.host}:${config.app.port}/api/v1/monitor`);

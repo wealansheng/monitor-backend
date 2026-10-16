@@ -86,6 +86,7 @@ test('POST /api/v1/monitor 接收批量信封并返回接收数量', async () =>
   };
   const payload = {
     app_id: 'web-portal',
+    projectName: 'frontend-project',
     sample_rate: 1,
     sdk_version: '2.0.0',
     send_time: 1712345679999,
@@ -115,6 +116,7 @@ test('POST /api/v1/monitor 接收批量信封并返回接收数量', async () =>
       assert.deepEqual(body.eventIds, ['d6dd3d25-5a95-41ba-acf5-83ac856b1125']);
       assert.equal(writes.length, 1);
       assert.equal(writes[0].category, 'behavior');
+      assert.equal(writes[0].events[0].project_name, 'frontend-project');
       assert.equal(writes[0].events[0].sdk_version, '2.0.0');
     },
     batchConfig,

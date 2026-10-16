@@ -1,5 +1,6 @@
 'use strict';
 
+const path = require('node:path');
 const { readLocalEnv } = require('./local-env');
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -27,6 +28,14 @@ function loadConfig(env = process.env) {
       host: env.HOST || 'localhost',
       port: parsePort(env.PORT || '8888'),
       maxBodySize: env.MAX_BODY_SIZE || '5mb',
+    },
+    sourceMaps: {
+      token: env.SOURCEMAP_ADMIN_TOKEN || '',
+      directory: path.resolve(env.SOURCEMAP_DIR || path.join(process.cwd(), 'data/sourcemaps')),
+      maxBodySize: env.SOURCEMAP_MAX_BODY_SIZE || '30mb',
+    },
+    dashboard: {
+      token: env.MONITOR_DASHBOARD_TOKEN || '',
     },
     clickhouse: {
       url: env.CLICKHOUSE_URL || 'http://localhost:8123',
