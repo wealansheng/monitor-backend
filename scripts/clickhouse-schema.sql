@@ -151,6 +151,7 @@ CREATE TABLE IF NOT EXISTS weils_monitor.frontend_error
     message String DEFAULT '',
     name LowCardinality(String) DEFAULT '',
     stack String DEFAULT '' CODEC(ZSTD(3)),
+    stack_frames String DEFAULT '[]' CODEC(ZSTD(3)),
     filename String DEFAULT '',
     lineno UInt32 DEFAULT 0,
     colno UInt32 DEFAULT 0,
@@ -202,6 +203,8 @@ TTL event_time + INTERVAL 180 DAY DELETE
 SETTINGS index_granularity = 8192
 COMMENT 'Error and stability events';
 
+ALTER TABLE weils_monitor.frontend_error
+    ADD COLUMN IF NOT EXISTS stack_frames String DEFAULT '[]' CODEC(ZSTD(3)) AFTER stack;
 ALTER TABLE weils_monitor.frontend_error
     ADD COLUMN IF NOT EXISTS project_name LowCardinality(String) DEFAULT '' AFTER app_id;
 ALTER TABLE weils_monitor.frontend_error
