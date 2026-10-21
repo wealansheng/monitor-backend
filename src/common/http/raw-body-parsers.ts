@@ -32,6 +32,9 @@ function isSourceMapUpload(request: Request): boolean {
  * 非法的 `/*` 路径），且这里需要按路径与方法精确隔离，保持既有行为不变。
  */
 export function registerRawBodyParsers(expressApp: Express, config: MonitorConfig): void {
+  const isRecordUpload = (request: Request): boolean => request.method === 'POST' && normalizePath(request.path) === '/api/v1/records';
+  const recordParser = raw({ type: () => true, limit: '512kb' });
+  expressApp.use((request, response, next) => isRecordUpload(request) ? recordParser(request, response, next) : next());
   const sourceMapParser = raw({
     type: 'application/json',
     limit: config.sourceMaps.maxBodySize,
@@ -49,7 +52,7 @@ export function registerRawBodyParsers(expressApp: Express, config: MonitorConfi
 
   expressApp.use((request, response, next) => {
     // 该路径已由上面的解析器（或旧实现中的 sourcemap 路由）负责，避免覆盖其结果。
-    if (isSourceMapUpload(request)) return next();
+    if (isSourceMapUpload(request) || isRecordUpload(request)) return next();
     return bodyParser(request, response, next);
   });
 }

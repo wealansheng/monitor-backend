@@ -1,6 +1,6 @@
 # ClickHouse 前端监控模型
 
-本模型严格以 [`字段要求.md`](字段要求.md) 为输入协议，数据库为 `weils_monitor`。由于当前只设置三张明细表，协议里的六类事件按用途路由：
+普通事件以 [`字段要求.md`](字段要求.md) 为输入协议，数据库默认为 `weils_monitor`。六类事件按用途写入三张明细表；Replay 使用独立协议写入第四张 `event_record`，不增加普通事件类型：
 
 | `event_type` | 目标表 | 说明 | 默认 TTL |
 | --- | --- | --- | --- |
@@ -12,6 +12,12 @@
 | `behavior` | `frontend_behavior` | PV、路由、点击、曝光、停留和业务行为 | 30 天 |
 
 完整、幂等的 DDL 位于 [`scripts/clickhouse-schema.sql`](../scripts/clickhouse-schema.sql)。
+
+| 独立载荷 | 目标表 | 行粒度 | 默认 TTL |
+| --- | --- | --- | --- |
+| Replay gzip/base64 分片 | `event_record` | 每个录制分片一行，含错误 ID 数组 | 30 天 |
+
+库名与三张事件表由现有 `CLICKHOUSE_*` 配置覆盖；录制表单独由 `CLICKHOUSE_RECORD_TABLE` 指定。`npm run db:init` 同时创建四张表，并补齐已有事件表的新增列。
 
 ## 公共字段
 
@@ -52,7 +58,7 @@ SDK 的 `initiatorType`、`transferSize`、`encodedBodySize`、`startTime` 会�
 
 ### `frontend_error`
 
-- 错误主体：`error_type`、`message`、`name`、`stack`、`filename`、`lineno`、`colno`
+- 错误主体：`error_type`、`message`、`name`、`stack`、`stack_frames`、`filename`、`lineno`、`colno`
 - 框架信息：`component`、`component_stack`、`props`
 - Promise：`reason`、`stack`
 - 资源错误：`resource_url`、`resource_type`、`tag_name`
@@ -61,6 +67,8 @@ SDK 的 `initiatorType`、`transferSize`、`encodedBodySize`、`startTime` 会�
 - 稳定性：`issue_type`、`blank_time`、`root_node_count`
 
 `breadcrumbs`、`props` 和 `extra` 以压缩 JSON 字符串保存；`tags` 使用 `Map(String, String)`，适合直接过滤。
+
+`stack_frames` 也保存为 JSON 字符串，默认 `'[]'`。SDK 的调用帧数组在接收端序列化，用于私有 Source Map 还原；普通 `stack` 继续保留。
 
 ### `frontend_behavior`
 
@@ -73,11 +81,33 @@ SDK 的 `initiatorType`、`transferSize`、`encodedBodySize`、`startTime` 会�
 
 ## 存储设计
 
+以下规则针对三张普通事件表；录制表使用下文单独的去重模型。
+
 - `timestamp` 保留 SDK 原始毫秒值，物化生成 UTC `event_time`，避免丢失毫秒精度。
 - 按月分区控制分区数量，按 `app_id + environment + event_date` 开头排序，适合项目级时间范围查询。
 - 低基数字段使用 `LowCardinality(String)`；堆栈、请求体和任意 JSON 使用 ZSTD 压缩。
 - `session_id`、`trace_id`、`route` 等常用等值过滤字段设置 Bloom Filter 跳数索引。
 - `MergeTree` 不保证 `event_id` 唯一，客户端重试必须复用 ID，写入端应进行必要的幂等控制。
+
+### `event_record` 录制分片表
+
+| 列 | 类型 / 用途 |
+| --- | --- |
+| `app_id`、`record_id` | 应用隔离维度与 UUID 录制标识 |
+| `session_id`、`user_id`、`route` | 可直接筛选的会话、脱敏用户和路由 |
+| `started_at`、`ended_at` | Unix 毫秒；`event_time` 从开始时间物化为 UTC |
+| `error_ids` | `Array(String)`，保存关联错误 UUID |
+| `chunk_index`、`chunk_count` | `UInt8`，从 0 开始的片号和预期总片数 |
+| `chunk_checksum`、`metadata_hash`、`variant_hash` | `FixedString(64)`，片校验、规范化元信息校验及冲突版本标识 |
+| `metadata` | ZSTD 压缩的 JSON 字符串，保存完整录制元信息 |
+| `payload` | 客户端已经 gzip/base64 编码的分片字符串 |
+| `received_at` | `DateTime64(3, 'UTC')`，替换版本列 |
+
+引擎为 `ReplacingMergeTree(received_at)`，按开始时间月份分区，排序键为 `(app_id, record_id, chunk_index, variant_hash)`，TTL 是 `event_time + INTERVAL 30 DAY`。错误数组和会话设有 Bloom Filter 跳数索引。上传可乱序，每片都携带相同录制元信息。
+
+同内容重试由 `FINAL` 去除物理版本；同片不同内容或元信息冲突产生不同 `variant_hash` 并保留证据，不能只按 `(app_id, record_id, chunk_index)` 合并。管理查询将录制标记为 `complete`、`incomplete` 或 `corrupt`，后两者不能读取播放分片。`complete` 表示后端片数及版本一致；浏览器仍需校验整包、解压体积和 rrweb 事件结构。
+
+仅含录制的应用也会出现在工作台应用列表，分片数不计入页面访问、错误和六类事件总数。完整上传及管理查询协议见 [Replay 文档](replay.md)。
 
 ## 查询示例
 

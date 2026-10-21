@@ -48,7 +48,7 @@ describe('MonitorRepository', () => {
     await repository.initialize();
     await repository.insertMany('error', [{ event_id: 'id-1' }, { event_id: 'id-2' }]);
 
-    expect(createQueries).toHaveLength(15);
+    expect(createQueries).toHaveLength(16);
     expect(createQueries.some((query) => query.includes("ADD COLUMN IF NOT EXISTS stack_frames String DEFAULT '[]'"))).toBe(true);
     expect(createQueries[0]).toMatch(/CREATE DATABASE IF NOT EXISTS `weils_monitor`/);
     expect(createQueries[1]).toMatch(

@@ -30,6 +30,7 @@ async function initialize(): Promise<void> {
         client,
         database: config.clickhouse.database,
         tables: config.clickhouse.tables,
+        recordTable: config.clickhouse.recordTable,
       });
       await repository.initialize();
       console.log(`ClickHouse 初始化完成: ${config.clickhouse.database}`);

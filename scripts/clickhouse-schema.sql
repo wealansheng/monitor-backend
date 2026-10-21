@@ -285,3 +285,33 @@ ALTER TABLE weils_monitor.frontend_behavior
     ADD COLUMN IF NOT EXISTS sample_rate Float64 DEFAULT 1 AFTER sdk_version;
 ALTER TABLE weils_monitor.frontend_behavior
     ADD COLUMN IF NOT EXISTS send_time UInt64 DEFAULT 0 AFTER sample_rate;
+
+-- Replay payloads are already gzip/base64 encoded by the browser.
+CREATE TABLE IF NOT EXISTS weils_monitor.event_record
+(
+    app_id LowCardinality(String),
+    record_id UUID,
+    session_id String,
+    user_id String DEFAULT '',
+    route String DEFAULT '',
+    started_at UInt64,
+    ended_at UInt64,
+    event_time DateTime64(3, 'UTC') MATERIALIZED fromUnixTimestamp64Milli(toInt64(started_at), 'UTC'),
+    event_date Date MATERIALIZED toDate(event_time),
+    error_ids Array(String),
+    chunk_index UInt8,
+    chunk_count UInt8,
+    chunk_checksum FixedString(64),
+    metadata_hash FixedString(64),
+    variant_hash FixedString(64),
+    metadata String CODEC(ZSTD(3)),
+    payload String,
+    received_at DateTime64(3, 'UTC') DEFAULT now64(3),
+    INDEX idx_record_error error_ids TYPE bloom_filter(0.01) GRANULARITY 4,
+    INDEX idx_record_session session_id TYPE bloom_filter(0.01) GRANULARITY 4
+)
+ENGINE = ReplacingMergeTree(received_at)
+PARTITION BY toYYYYMM(event_date)
+ORDER BY (app_id, record_id, chunk_index, variant_hash)
+TTL event_time + INTERVAL 30 DAY DELETE
+COMMENT 'Error replay chunks - variant hash preserves evidence of conflicting retries';

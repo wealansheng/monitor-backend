@@ -35,6 +35,7 @@ export interface ClickHouseTables {
 export type TableCategory = keyof ClickHouseTables;
 
 export interface ClickHouseConfig {
+  recordTable?: string;
   url: string;
   username: string;
   password: string;

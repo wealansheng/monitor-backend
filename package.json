@@ -13,6 +13,7 @@
     "sourcemaps:upload": "nest build && node dist/upload-sourcemaps.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "jest",
+    "test:replay:clickhouse": "jest --runInBand --testRegex records.clickhouse.integration.ts",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage"
   },

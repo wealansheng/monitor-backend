@@ -68,6 +68,7 @@ export function monitorConfiguration(env: NodeJS.ProcessEnv = process.env): Moni
       password: clickhousePassword,
       database: assertIdentifier('CLICKHOUSE_DATABASE', env.CLICKHOUSE_DATABASE || 'weils_monitor'),
       tables: readTables(env),
+      recordTable: assertIdentifier('CLICKHOUSE_RECORD_TABLE', env.CLICKHOUSE_RECORD_TABLE || 'event_record'),
       autoMigrate: env.CLICKHOUSE_AUTO_MIGRATE === 'true',
       adminUsername: assertIdentifier(
         'CLICKHOUSE_ADMIN_USERNAME',

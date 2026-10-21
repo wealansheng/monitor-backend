@@ -1,6 +1,8 @@
 # Monitor Backend
 
-基于 NestJS 的监控数据接收服务，使用 ClickHouse 持久化上报内容。
+基于 NestJS 的监控数据接收服务，使用 ClickHouse 持久化普通事件和 Replay 录制分片，并提供管理查询与私有 Source Map 还原。
+
+配套项目：[业务 SDK](../weils-monitor/README.md)、[管理工作台](../monitor-frontend/README.md)。SDK 只负责录制与上传，工作台负责播放；三项目联调步骤见 [SDK 联调指南](../weils-monitor/docs/replay.md)。
 
 ## 分层结构
 
@@ -18,11 +20,14 @@ src/
 ├─ database/                   # ClickHouse 客户端、DDL、MonitorRepository
 ├─ monitor/                    # 上报：管道（校验）+ 协议适配 + 服务 + 控制器
 ├─ dashboard/                  # 监控工作台只读查询（DTO + 令牌守卫）
-└─ sourcemap/                  # 私有 Source Map 上传与错误还原
+├─ sourcemap/                  # 私有 Source Map 上传与错误还原
+└─ records/                    # 录制上传协议、分片持久化与管理查询
 ```
 
 每个功能模块自成一个 Nest 模块，依赖方向为
 `controller → pipe/guard → service → repository → ClickHouse`。
+
+录制模块直接由控制器调用协议校验函数和 `RecordsRepository`，不单设 service；普通监控与 Source Map 模块继续使用各自的服务层。
 
 `db-init.ts` 与 `upload-sourcemaps.ts` 是独立入口，分别对应 `npm run db:init`
 与 `npm run sourcemaps:upload`。
@@ -33,6 +38,7 @@ src/
 
 ```bash
 npm install
+# 先复制 .env.example 为 .env，配置 ClickHouse 与管理查询令牌
 npm run db:init     # 建库建表（内部会先构建）
 npm run build
 npm start
@@ -50,6 +56,7 @@ npm start
 - 性能表：`frontend_performance`
 - 错误表：`frontend_error`
 - 行为表：`frontend_behavior`
+- 录制分片表：`event_record`，由 `CLICKHOUSE_RECORD_TABLE` 覆盖，默认 TTL 30 天
 
 配置在启动时一次性校验，端口或库名 / 表名非法会立刻启动失败：
 
@@ -63,8 +70,9 @@ npm start
 控制体积上限并给出明确提示，因此关闭了 Nest 内置的 body parser
 （`app.setup.ts` 中的 `NEST_APP_OPTIONS`），改为在 Express 实例上显式注册：
 
-1. `POST /api/v1/sourcemaps`：只接受 `application/json`，上限 `SOURCEMAP_MAX_BODY_SIZE`（默认 30 MB）；
-2. 其余请求：不区分 `Content-Type` 一律按原始字节读取，上限 `MAX_BODY_SIZE`（默认 5 MB）。
+1. `POST /api/v1/records`：独立原始字节解析器，固定上限 512KiB；协议为 JSON 对象，每次一片；
+2. `POST /api/v1/sourcemaps`：只接受 `application/json`，上限 `SOURCEMAP_MAX_BODY_SIZE`（默认 30 MB）；
+3. 其余请求：不区分 `Content-Type` 一律按原始字节读取，上限 `MAX_BODY_SIZE`（默认 5 MB）。
 
 解析器直接挂在 Express 实例而不是使用 Nest 中间件，原因是顺序必须严格先于所有路由，
 且需要按路径与方法精确隔离（Nest 的 `forRoutes('*')` 在 Express 5 下会生成非法的 `/*` 路径）。
@@ -89,6 +97,8 @@ npm start
 - `frontend_error`：JavaScript、Promise、框架、资源和 HTTP 错误
 - `frontend_behavior`：页面访问、点击、路由、滚动和自定义行为
 
+第四张 `event_record` 每片一行，独立保存客户端 gzip/base64 录制及错误 UUID 关联。后端校验协议、分片形状和校验值，不解压执行录制。录制分片不计入原有六类事件统计；只有录制的应用也能出现在工作台应用列表。
+
 可执行 DDL 见 [`scripts/clickhouse-schema.sql`](scripts/clickhouse-schema.sql)，字段说明、保留策略、隐私约束和查询示例见 [`docs/clickhouse-schema.md`](docs/clickhouse-schema.md)。字段协议以 [`docs/字段要求.md`](docs/字段要求.md) 为准；接口同时兼容单事件和 `events` 批量信封。上报请求通过 `event_type` 路由，`performance/request/resource` 写性能表，`error/stability` 写错误表，`behavior` 写行为表。
 
 生产环境建议通过环境变量覆盖配置，变量清单见 `.env.example`。
@@ -97,8 +107,9 @@ npm start
 ## 文档
 
 - [`docs/字段要求.md`](docs/字段要求.md)：SDK 上报协议、必填规则及六类事件示例
-- [`docs/clickhouse-schema.md`](docs/clickhouse-schema.md)：三表映射、字段存储方式、TTL 和查询示例
+- [`docs/clickhouse-schema.md`](docs/clickhouse-schema.md)：普通事件三表映射、独立录制表、字段存储、TTL 和查询示例
 - [`scripts/clickhouse-schema.sql`](scripts/clickhouse-schema.sql)：可直接审查和执行的 ClickHouse DDL
+- [`docs/replay.md`](docs/replay.md)：录制协议、四类管理查询、分片状态、权限和排障
 
 ## 接口
 
@@ -111,6 +122,18 @@ npm start
 - `GET /api/v1/dashboard/event?app_id=<应用ID>&event_id=<事件UUID>&event_type=error`：单条事件的完整字段。`event_type` 可选（给出时只查对应表，否则按 error → behavior → performance 依次查找），`event_id` 必须是 UUID。响应含 `category`（所属表）与 `event`（该表原始行）；事件不存在返回 404，`event_id` 非法返回 400。`fingerprint_hash` 是物化列，不会出现在 `SELECT *` 中，接口已显式取出。
 
 管理令牌只由操作员在监控工作台中输入，不能写进前端构建变量或公开仓库。未配置令牌时，管理查询路由不启用。
+
+录制接口使用独立载荷：
+
+| 方法与路径 | 鉴权 | 用途 |
+| --- | --- | --- |
+| `POST /api/v1/records` | 公开采集入口 | 接收单个录制分片，入库后返回录制 ID、片号和片校验值 |
+| `GET /api/v1/dashboard/records` | 管理查询令牌 | 按应用、时间、用户、会话、路由、错误筛选录制 |
+| `GET /api/v1/dashboard/records/:recordId` | 管理查询令牌 | 查询元信息及 complete / incomplete / corrupt 状态 |
+| `GET /api/v1/dashboard/records/:recordId/chunks` | 管理查询令牌 | 分页获取完整录制的编码分片 |
+| `GET /api/v1/dashboard/errors/:eventId/records` | 管理查询令牌 | 按真实错误 UUID 查询近 30 天关联录制 |
+
+上述管理查询都要求 `app_id`，返回 `Cache-Control: no-store`。请求与响应细节见 [Replay 协议](docs/replay.md)。
 
 ```bash
 curl -X POST http://localhost:8888/api/v1/monitor \
@@ -166,7 +189,7 @@ curl "http://localhost:8888/api/v1/monitor/errors/d6dd3d25-5a95-41ba-acf5-83ac85
   -H "Authorization: Bearer <SOURCEMAP_ADMIN_TOKEN>"
 ```
 
-响应保留原始 `stack`，并返回逐帧的 `generated`、`original` 和 `status`。未找到 map、缺少版本或该位置无映射时仍返回原始帧；事件不存在返回 404。源码内容只存于私有 map，不经该接口返回。Nuxt SSR 帧需包含 `.output/server/` 路径，才能与上传的服务端相对路径匹配。
+响应保留原始 `stack`，并返回逐帧的 `generated`、`original`、`status`，存在内嵌源码时还会返回有限的 `context` 行。未找到 map、缺少版本或该位置无映射时仍返回原始帧；事件不存在返回 404。接口不提供完整 map 或源码文件下载。Nuxt SSR 帧需包含 `.output/server/` 路径，才能与上传的服务端相对路径匹配。
 
 Nuxt 生产客户端 payload 通常不含 SSR 原始堆栈；需在 Nitro 运行环境中配置 `MONITOR_SSR_ENDPOINT`、`MONITOR_SSR_APP_ID` 和 `MONITOR_RELEASE`，由服务端错误钩子向此服务上报可还原的错误事件。
 
@@ -175,6 +198,7 @@ Nuxt 生产客户端 payload 通常不含 SSR 原始堆栈；需在 Nitro 运行
 ```bash
 npm test            # Jest，单元测试 + 端到端测试
 npm run typecheck   # tsc --noEmit
+npm run test:replay:clickhouse # 可选，需 Windows + WSL ClickHouse 和浏览器依赖
 ```
 
 测试覆盖三层：
@@ -188,6 +212,7 @@ npm run typecheck   # tsc --noEmit
   `dashboard.e2e-spec.ts`、`sourcemap.e2e-spec.ts` 通过 `supertest` 访问
   真实的 Nest 应用实例（与 `main.ts` 共用 `setupApp` 装配），
   ClickHouse 客户端替换为替身，因此不需要数据库。
+- **录制测试**：`records.e2e-spec.ts` 与 `records.repository.spec.ts` 覆盖协议、回执、查询、隔离与分片冲突；显式 ClickHouse 集成测试会创建并清理随机临时库，前置条件见 [Replay 验证说明](docs/replay.md#验证)。
 
 ## 迁移说明
 
@@ -199,3 +224,6 @@ npm run typecheck   # tsc --noEmit
   超限的请求返回 413 而不是 401（体积校验更早失败）。
 - Bearer 认证方案名改为大小写不敏感（RFC 7235），即 `bearer <token>` 也接受；
   此前只有 Source Map 接口如此，工作台接口要求严格匹配 `Bearer `。
+## 录制数据迁移
+
+升级前先执行 `npm run db:init`，为已有部署创建 `event_record`，再给运行账号授予该表 SELECT/INSERT 权限。禁用自动迁移时，应用列表查询也依赖录制表，不能只部署代码而跳过建表。默认 TTL 为录制开始时间后的 30 天，由 ClickHouse 后台按 TTL 清理；客户端待传队列默认 24 小时是另一独立期限。

@@ -40,6 +40,7 @@ const EVENT_COLUMNS: Record<TableCategory, string> = {
 };
 
 export interface MonitorRepositoryOptions {
+  recordTable?: string;
   client: ClickHouseClientPort;
   database: string;
   tables: ClickHouseTables;
@@ -114,10 +115,12 @@ export class MonitorRepository {
   private readonly database: string;
 
   private readonly tables: ClickHouseTables;
+  private readonly recordTable: string;
 
   private readonly qualifiedTables: Record<TableCategory, string>;
 
-  constructor({ client, database, tables }: MonitorRepositoryOptions) {
+  constructor({ client, database, tables, recordTable = 'event_record' }: MonitorRepositoryOptions) {
+    this.recordTable = recordTable;
     this.client = client;
     this.database = database;
     this.tables = tables;
@@ -130,7 +133,7 @@ export class MonitorRepository {
 
   /** 建库、建表，并为已有表补充新增字段。 */
   async initialize(): Promise<void> {
-    const statements = getSchemaStatements({ database: this.database, tables: this.tables });
+    const statements = getSchemaStatements({ database: this.database, tables: this.tables, recordTable: this.recordTable });
     for (const query of statements) {
       await this.client.command({ query });
     }
@@ -192,6 +195,7 @@ export class MonitorRepository {
 
   async findDashboardApps(): Promise<Record<string, unknown>[]> {
     const { performance, error, behavior } = this.qualifiedTables;
+    const records = `${quoteIdentifier(this.database)}.${quoteIdentifier(this.recordTable)}`;
     return this.dashboardQuery(`
       SELECT appId, argMax(projectName, latest) AS projectName,
         sum(events) AS events, max(latest) AS lastSeen
@@ -204,6 +208,9 @@ export class MonitorRepository {
         UNION ALL
         SELECT app_id AS appId, any(project_name) AS projectName,
           count() AS events, max(timestamp) AS latest FROM ${behavior} GROUP BY app_id
+        UNION ALL
+        SELECT app_id AS appId, any(JSONExtractString(metadata, 'project_name')) AS projectName,
+          0 AS events, max(started_at) AS latest FROM ${records} GROUP BY app_id
       ) GROUP BY appId ORDER BY lastSeen DESC LIMIT 100
     `);
   }

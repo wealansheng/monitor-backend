@@ -36,6 +36,7 @@ import { MonitorRepository } from './monitor.repository';
           client,
           database: config.clickhouse.database,
           tables: config.clickhouse.tables,
+          recordTable: config.clickhouse.recordTable,
         }),
     },
     DatabaseBootstrapService,

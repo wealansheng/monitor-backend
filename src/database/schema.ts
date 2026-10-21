@@ -27,9 +27,11 @@ export function splitSqlStatements(sql: string): string[] {
 export function getSchemaStatements({
   database,
   tables,
+  recordTable = 'event_record',
 }: {
   database: string;
   tables: ClickHouseTables;
+  recordTable?: string;
 }): string[] {
   const qualifiedTables = {
     performance: `${quoteIdentifier(database)}.${quoteIdentifier(tables.performance)}`,
@@ -45,7 +47,8 @@ export function getSchemaStatements({
     )
     .replaceAll('weils_monitor.frontend_performance', qualifiedTables.performance)
     .replaceAll('weils_monitor.frontend_error', qualifiedTables.error)
-    .replaceAll('weils_monitor.frontend_behavior', qualifiedTables.behavior);
+    .replaceAll('weils_monitor.frontend_behavior', qualifiedTables.behavior)
+    .replaceAll('weils_monitor.event_record', `${quoteIdentifier(database)}.${quoteIdentifier(recordTable)}`);
 
   return splitSqlStatements(sql);
 }
