@@ -11,3 +11,5 @@ npm-debug.log*
 # 私有 Source Map 目录，避免把构建源码与映射上传到代码仓库。
 data/sourcemaps/
 mapdata/
+# deploy/deploy.sh 生成的本地发布包与校验文件。
+.release/
