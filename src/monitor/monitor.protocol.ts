@@ -1,3 +1,4 @@
+/** SDK 协议适配：展开批量信封、规范别名并按目标表投影字段。 */
 import { BadRequestException } from '@nestjs/common';
 
 import { TableCategory } from '../config/config.types';
@@ -130,7 +131,7 @@ const FIELD_ALIASES: Record<string, string> = {
   sdk_verion: 'sdk_version',
 };
 
-/** 需要序列化成 JSON 字符串再写入 ClickHouse 的字段。 */
+/** 需要序列化成 JSON 字符串再写入 MySQL 的字段。 */
 const JSON_STRING_FIELDS = new Set([
   'stack_frames',
   'breadcrumbs',
@@ -141,8 +142,8 @@ const JSON_STRING_FIELDS = new Set([
   'response_body',
 ]);
 
-/** ClickHouse `DateTime64(3)` 接受的字面量格式。 */
-export function formatClickHouseDateTime(date: Date): string {
+/** MySQL `DATETIME(3)` 接受的字面量格式。 */
+export function formatDatabaseDateTime(date: Date): string {
   return date.toISOString().replace('T', ' ').replace('Z', '');
 }
 
@@ -181,6 +182,7 @@ export function expandEnvelope(envelope: Record<string, unknown>): Record<string
   return payload;
 }
 
+/** 展开批量信封后的事件集合、批量标志和共享信封字段。 */
 export interface ExpandedEvents {
   isBatch: boolean;
   /** 批量信封的公共字段，单事件时为空对象。 */
@@ -236,14 +238,17 @@ export function coerceNumericFields(payload: Record<string, unknown>): void {
   if (payload.timestamp !== undefined) payload.timestamp = Number(payload.timestamp);
 }
 
+/** 仅将非数组对象作为字段容器，非法输入回退为空对象。 */
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null;
 }
 
+/** 把 JSON 对象或已有 JSON 字符串统一为存储所需的字符串。 */
 function normalizeJsonField(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
+/** 按允许字段列表投影输入，避免把任意上报字段写入表。 */
 function copyFields(
   event: Record<string, unknown>,
   payload: Record<string, unknown>,
@@ -284,7 +289,7 @@ function flattenClientFields(event: Record<string, unknown>, payload: Record<str
 }
 
 /**
- * 按目标表把事件负载投影成一行 ClickHouse 记录。
+ * 按目标表把事件负载投影成一行 MySQL 记录。
  * 请求级字段（IP、User-Agent）由服务端补齐，不信任客户端上报。
  */
 export function buildEvent(
@@ -296,7 +301,7 @@ export function buildEvent(
     event_id: payload.event_id,
     event_type: payload.event_type,
     timestamp: payload.timestamp,
-    received_at: formatClickHouseDateTime(new Date()),
+    received_at: formatDatabaseDateTime(new Date()),
     client_ip: meta.ip,
     user_agent: meta.userAgent,
   };
@@ -305,7 +310,7 @@ export function buildEvent(
   copyFields(event, payload, TABLE_FIELDS[tableCategory]);
   flattenClientFields(event, payload);
 
-  // ClickHouse 侧是 UInt8，布尔值需要显式转换。
+  // MySQL 侧是 TINYINT，布尔值需要显式转换。
   if (event.success !== undefined) event.success = event.success ? 1 : 0;
   if (event.cached !== undefined) event.cached = event.cached ? 1 : 0;
   return event;

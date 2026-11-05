@@ -1,3 +1,4 @@
+/** 源码映射服务回归：验证栈格式、版本隔离、定位回退和上传冲突。 */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -18,6 +19,7 @@ const map = (source: string, mappings = 'AAAA') => ({
   mappings,
 });
 
+/** 构造错误事件样本，允许用例覆盖堆栈、版本与应用定位字段。 */
 function errorEvent(release: string, stack: string, errorType = 'js_error'): ErrorEventRow {
   return {
     event_id: eventId,
@@ -62,6 +64,7 @@ async function withService(
 }
 
 describe('SourceMapService', () => {
+  /** 验证优先使用完整结构化栈，提取源码并保持列号从 1 开始。 */
   it('优先使用完整结构化栈，提取源码并保持列号从 1 开始', async () => {
     await withService(async (service, state) => {
       const lines = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`);
@@ -84,6 +87,7 @@ describe('SourceMapService', () => {
     });
   });
 
+  /** 验证源码片段截断文件边界，缺少 sourcesContent 时仍还原位置。 */
   it('源码片段截断文件边界，缺少 sourcesContent 时仍还原位置', async () => {
     await withService(async (service, state) => {
       for (const release of ['with-content', 'without-content']) {
@@ -97,6 +101,7 @@ describe('SourceMapService', () => {
     });
   });
 
+  /** 验证空或损坏的结构化字段可回退旧 stack；应用间不混用 map。 */
   it('空或损坏的结构化字段可回退旧 stack；应用间不混用 map', async () => {
     await withService(async (service, state) => {
       await service.upload({ app_id: 'another-app', release: 'v1', kind: 'client', artifact: asset, map: map('src/private.ts') });
@@ -108,6 +113,7 @@ describe('SourceMapService', () => {
       }
     });
   });
+  /** 验证按 release 隔离映射，并兼容 V8 与 Firefox 帧格式。 */
   it('按 release 隔离映射，并兼容 V8 与 Firefox 帧格式', async () => {
     await withService(async (service, state) => {
       await service.upload({
@@ -146,6 +152,7 @@ describe('SourceMapService', () => {
     });
   });
 
+  /** 验证晚到的上传、部分映射、缺失 release 与空堆栈都保留原始证据。 */
   it('晚到的上传、部分映射、缺失 release 与空堆栈都保留原始证据', async () => {
     await withService(async (service, state) => {
       const event = errorEvent(
@@ -181,6 +188,7 @@ describe('SourceMapService', () => {
     });
   });
 
+  /** 验证没有堆栈时回退到 window.onerror 的定位信息。 */
   it('没有堆栈时回退到 window.onerror 的定位信息', async () => {
     await withService(async (service, state) => {
       await service.upload({
@@ -198,6 +206,7 @@ describe('SourceMapService', () => {
     });
   });
 
+  /** 验证Nuxt 服务端帧按构建相对路径匹配，并忽略 node 内部帧。 */
   it('Nuxt 服务端帧按构建相对路径匹配，并忽略 node 内部帧', async () => {
     await withService(async (service, state) => {
       await service.upload({
@@ -220,6 +229,7 @@ describe('SourceMapService', () => {
     });
   });
 
+  /** 验证上传校验 Source Map，并拒绝同一 release 的冲突产物。 */
   it('上传校验 Source Map，并拒绝同一 release 的冲突产物', async () => {
     await withService(async (service) => {
       const input = {
@@ -246,6 +256,7 @@ describe('SourceMapService', () => {
     });
   });
 
+  /** 验证还原查询校验 app_id 与事件 ID。 */
   it('还原查询校验 app_id 与事件 ID', async () => {
     await withService(async (service) => {
       expect(await rejectedStatus(service.symbolicate('', eventId))).toBe(400);

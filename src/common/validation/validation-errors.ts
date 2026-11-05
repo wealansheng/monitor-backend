@@ -1,6 +1,8 @@
+/** 校验错误整理工具：按稳定顺序输出字段错误及批量下标。 */
 import { BadRequestException } from '@nestjs/common';
 import { ValidationError } from 'class-validator';
 
+/** 字段校验失败时输出的有序错误消息。 */
 export interface ValidationMessage {
   property: string;
   message: string;

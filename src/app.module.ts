@@ -1,3 +1,4 @@
+/** 应用根模块：装配配置、数据库、采集、工作台和源码映射能力。 */
 import { Module } from '@nestjs/common';
 
 import { AppController } from './app.controller';
@@ -7,6 +8,7 @@ import { DatabaseModule } from './database/database.module';
 import { MonitorModule } from './monitor/monitor.module';
 import { SourceMapModule } from './sourcemap/sourcemap.module';
 import { RecordsModule } from './records/records.module';
+import { IngestionModule } from './ingestion/ingestion.module';
 
 /**
  * 根模块。
@@ -15,7 +17,7 @@ import { RecordsModule } from './records/records.module';
  * 返回 404，等价于旧实现“未配置则不注册路由”的行为。
  */
 @Module({
-  imports: [AppConfigModule, DatabaseModule, MonitorModule, DashboardModule, SourceMapModule, RecordsModule],
+  imports: [AppConfigModule, DatabaseModule, IngestionModule, MonitorModule, DashboardModule, SourceMapModule, RecordsModule],
   controllers: [AppController],
 })
 export class AppModule {}

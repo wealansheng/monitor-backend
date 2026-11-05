@@ -1,3 +1,4 @@
+/** 统一初始化 HTTP 管道、中间件和异常响应，供正式启动与测试复用。 */
 import { ValidationPipe } from '@nestjs/common';
 import type { NestApplicationOptions } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -16,6 +17,7 @@ import { MonitorConfig } from './config/config.types';
  */
 export const NEST_APP_OPTIONS: NestApplicationOptions = { bodyParser: false };
 
+/** 取得 Nest 底层 Express 实例，以安装原始请求体中间件。 */
 export function expressInstance(app: NestExpressApplication): Express {
   return app.getHttpAdapter().getInstance() as Express;
 }

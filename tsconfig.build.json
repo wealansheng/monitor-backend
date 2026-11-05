@@ -1,11 +1,18 @@
 {
+  // 继承开发配置，只覆盖正式产物所需选项。
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    // 正式构建只加载 Node.js 全局类型，避免引入 Jest 全局声明。
+    "types": ["node"],
+    // 源码根目录对应输出根目录，生成 dist/main.js 启动入口。
     "rootDir": "./src",
     "outDir": "./dist",
+    // 应用部署无需类型声明，禁用增量缓存以保持完整构建。
     "declaration": false,
     "incremental": false
   },
+  // 只编译服务端源码。
   "include": ["src/**/*.ts"],
+  // 测试、依赖与已有产物均不进入发布目录。
   "exclude": ["node_modules", "dist", "test", "**/*.spec.ts", "**/*.e2e-spec.ts"]
 }

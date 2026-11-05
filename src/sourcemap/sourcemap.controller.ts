@@ -1,3 +1,4 @@
+/** Source Map 管理端点：受令牌保护的映射上传与错误定位。 */
 import {
   BadRequestException,
   Body,
@@ -27,6 +28,7 @@ import { SourceMapTokenGuard } from './sourcemap-token.guard';
 export class SourceMapController {
   constructor(private readonly sourceMapService: SourceMapService) {}
 
+  /** 校验上传载荷并保存到私有目录。 */
   @Post('api/v1/sourcemaps')
   async upload(
     @Body() body: unknown,
@@ -48,6 +50,7 @@ export class SourceMapController {
     return { ok: true, ...result };
   }
 
+  /** 通过管理端入口还原错误事件的源码位置。 */
   @Get('api/v1/monitor/errors/:eventId/symbolication')
   @Header('Cache-Control', 'no-store')
   async symbolicate(

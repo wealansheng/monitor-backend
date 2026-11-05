@@ -1,27 +1,42 @@
 {
+  // 开发与测试共用的编译选项；此文件使用 TypeScript 支持的 JSONC 注释。
   "compilerOptions": {
-    "module": "commonjs",
+    // 使用 Node16 模块语义，与 Nest 的 CommonJS 运行方式兼容。
+    "module": "node16",
+    // 输出与标准库均面向支持 ES2023 的 Node.js 环境。
     "target": "ES2023",
     "lib": ["ES2023"],
-    "moduleResolution": "node",
+    // 与模块模式配套解析依赖，避开已弃用的 node10 解析方式。
+    "moduleResolution": "node16",
+    // Nest 的依赖注入需要装饰器语法及运行期类型元数据。
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
+    // 兼容 CommonJS 依赖的默认导入写法。
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
+    // 允许以类型安全的方式导入 JSON 模块。
     "resolveJsonModule": true,
+    // 跳过第三方声明文件内部检查，项目源码仍执行严格检查。
     "skipLibCheck": true,
+    // 生成调试映射，并为本地重复检查保留增量信息。
     "sourceMap": true,
     "incremental": true,
+    // 启用严格类型检查，并显式拒绝隐式 any。
     "strict": true,
     "noImplicitAny": true,
+    // DTO 和依赖注入属性可由框架赋值，不要求构造器中初始化。
     "strictPropertyInitialization": false,
+    // 避免 Windows 与区分大小写的部署环境出现路径差异。
     "forceConsistentCasingInFileNames": true,
+    // 防止 switch 意外贯穿，并清理未使用的声明与参数。
     "noFallthroughCasesInSwitch": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
+    // 默认输出目录；正式构建的细节由 tsconfig.build.json 覆盖。
     "outDir": "./dist",
-    "baseUrl": "./"
   },
+  // 常规类型检查同时覆盖业务源码与测试辅助代码。
   "include": ["src/**/*.ts", "test/**/*.ts"],
+  // 不重复检查已安装依赖或编译产物。
   "exclude": ["node_modules", "dist"]
 }

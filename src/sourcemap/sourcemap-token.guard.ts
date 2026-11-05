@@ -1,3 +1,4 @@
+/** Source Map 管理鉴权：只接受独立上传令牌。 */
 import {
   CanActivate,
   ExecutionContext,
@@ -10,7 +11,7 @@ import type { Request } from 'express';
 
 import { matchesBearerToken } from '../common/security/bearer-token.util';
 import { MONITOR_CONFIG } from '../config/config.constants';
-import { MonitorConfig } from '../config/config.types';
+import type { MonitorConfig } from '../config/config.types';
 
 /**
  * Source Map 管理接口的令牌校验。
@@ -22,6 +23,7 @@ import { MonitorConfig } from '../config/config.types';
 export class SourceMapTokenGuard implements CanActivate {
   constructor(@Inject(MONITOR_CONFIG) private readonly config: MonitorConfig) {}
 
+  /** 只接受独立 Source Map 管理令牌，未启用时隐藏上传管理接口。 */
   canActivate(context: ExecutionContext): boolean {
     const { token } = this.config.sourceMaps;
     if (!token) {

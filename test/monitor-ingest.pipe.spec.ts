@@ -1,3 +1,4 @@
+/** 上报校验测试：验证必填字段、SDK 兼容转换和批量错误顺序。 */
 import { MonitorIngestPipe } from '../src/monitor/monitor-ingest.pipe';
 
 const EVENT_ID = '8a604b37-b7c8-4f26-9eeb-37d38b2d55f3';
@@ -7,6 +8,7 @@ const pipe = new MonitorIngestPipe();
 const body = (payload: unknown): Buffer => Buffer.from(JSON.stringify(payload));
 
 describe('MonitorIngestPipe', () => {
+  /** 验证校验结构化帧，保留缺少位置的 native 帧，并拒绝非法行列号。 */
   it('校验结构化帧，保留缺少位置的 native 帧，并拒绝非法行列号', async () => {
     const base = { event_id: EVENT_ID, event_type: 'error', error_type: 'js_error', timestamp: 1, app_id: 'a' };
     const frames = [{ filename: 'https://cdn.test/app.js', lineno: 2, colno: 3 }, { function_name: 'native', raw: 'at native' }];
@@ -17,6 +19,7 @@ describe('MonitorIngestPipe', () => {
     await expect(pipe.transform(body({ events: [{ ...base, stack_frames: [{ colno: -1 }] }] })))
       .rejects.toThrow('events[0]: stack_frames');
   });
+  /** 验证解析单事件上报并回传原始字节数。 */
   it('解析单事件上报并回传原始字节数', async () => {
     const raw = body({
       event_id: EVENT_ID,
@@ -34,6 +37,7 @@ describe('MonitorIngestPipe', () => {
     expect(result.payloads[0]).toMatchObject({ event_id: EVENT_ID, event_type: 'behavior' });
   });
 
+  /** 验证空请求体与非法 JSON 的处理。 */
   it('空请求体与非法 JSON 的处理', async () => {
     await expect(pipe.transform(Buffer.alloc(0))).rejects.toThrow('Empty body');
     await expect(pipe.transform(undefined)).rejects.toThrow('Empty body');
@@ -49,6 +53,7 @@ describe('MonitorIngestPipe', () => {
     );
   });
 
+  /** 验证拒绝缺少公共必填字段的事件。 */
   it('拒绝缺少公共必填字段的事件', async () => {
     await expect(pipe.transform(body({ event_type: 'behavior', action: 'click' }))).rejects.toThrow(
       'event_id must be a UUID',
@@ -70,6 +75,7 @@ describe('MonitorIngestPipe', () => {
     );
   });
 
+  /** 验证拒绝无效的 project_name 且不写入数据层。 */
   it('拒绝无效的 project_name 且不写入数据层', async () => {
     await expect(
       pipe.transform(
@@ -85,6 +91,7 @@ describe('MonitorIngestPipe', () => {
     ).rejects.toThrow('project_name must be a non-empty string');
   });
 
+  /** 验证按事件类型校验专属必填字段。 */
   it('按事件类型校验专属必填字段', async () => {
     const base = { event_id: EVENT_ID, timestamp: 1712345678901, app_id: 'web-portal' };
 
@@ -108,6 +115,7 @@ describe('MonitorIngestPipe', () => {
     );
   });
 
+  /** 验证拒绝非法的批量元数据与空 events。 */
   it('拒绝非法的批量元数据与空 events', async () => {
     await expect(
       pipe.transform(body({ app_id: 'web-portal', sample_rate: 1.1, events: [{}] })),
@@ -123,6 +131,7 @@ describe('MonitorIngestPipe', () => {
     ).rejects.toThrow('send_time must be a positive Unix millisecond integer');
   });
 
+  /** 验证批量信封元数据先于事件校验，事件错误带下标前缀。 */
   it('批量信封元数据先于事件校验，事件错误带下标前缀', async () => {
     // 元数据非法时应先报元数据错误，且不带 events[i] 前缀。
     await expect(
@@ -146,6 +155,7 @@ describe('MonitorIngestPipe', () => {
     ).rejects.toThrow('events[1]: event_id must be a UUID');
   });
 
+  /** 验证字段校验顺序稳定：公共字段先于事件专属字段。 */
   it('字段校验顺序稳定：公共字段先于事件专属字段', async () => {
     // 同时缺少 event_id 与 error_type 时，应报 event_id。
     await expect(
@@ -158,6 +168,7 @@ describe('MonitorIngestPipe', () => {
     ).rejects.toThrow('timestamp must be a positive Unix millisecond integer');
   });
 
+  /** 验证兼容 SDK 的字符串数值与字段别名。 */
   it('兼容 SDK 的字符串数值与字段别名', async () => {
     const result = await pipe.transform(
       body({
@@ -182,6 +193,7 @@ describe('MonitorIngestPipe', () => {
     expect(payload.send_time).toBe(1712345679999);
   });
 
+  /** 验证展开 data 包装并继承批量信封字段。 */
   it('展开 data 包装并继承批量信封字段', async () => {
     const result = await pipe.transform(
       body({

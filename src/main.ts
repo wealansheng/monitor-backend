@@ -1,3 +1,4 @@
+/** HTTP 服务启动入口：加载配置、注册关闭钩子并监听端口。 */
 import 'reflect-metadata';
 
 import { Logger } from '@nestjs/common';
@@ -9,6 +10,7 @@ import { NEST_APP_OPTIONS, setupApp } from './app.setup';
 import { MONITOR_CONFIG } from './config/config.constants';
 import { MonitorConfig } from './config/config.types';
 
+/** 创建 Nest 应用，安装统一 HTTP 配置与关闭钩子后开始监听。 */
 async function bootstrap(): Promise<void> {
   const logger = new Logger('Bootstrap');
 
@@ -21,8 +23,8 @@ async function bootstrap(): Promise<void> {
 
   logger.log(`服务已启动: http://${host}:${port}`);
   logger.log(`上报接口:   POST http://${host}:${port}/api/v1/monitor`);
-  for (const table of Object.values(config.clickhouse.tables)) {
-    logger.log(`数据表:     ${config.clickhouse.database}.${table}`);
+  for (const table of [...Object.values(config.mysql.tables), config.mysql.recordTable]) {
+    logger.log(`数据表:     ${config.mysql.database}.${table}`);
   }
 
   let closing = false;

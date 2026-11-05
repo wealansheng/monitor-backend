@@ -11,12 +11,12 @@ npm run db:init
 npm run build
 ```
 
-新增 `CLICKHOUSE_RECORD_TABLE=event_record`；默认保留 30 天。使用现有 `CLICKHOUSE_DATABASE`、连接账号和 `CLICKHOUSE_AUTO_MIGRATE`。生产先用管理员账号执行 db:init，再给运行账号授予新表 SELECT/INSERT 权限。禁用自动迁移时，必须先建表再发布此版本（应用列表也读取新表）。
+配置 `MYSQL_RECORD_TABLE=event_record`，默认保留 14 个 UTC 日，由 MONITOR_RETENTION_DAYS 配置。连接使用 `MYSQL_HOST/PORT/USERNAME/PASSWORD/DATABASE`。生产先用管理员执行 db:init，再给运行账号授予 SELECT/INSERT/UPDATE/DELETE 权限；禁用自动迁移时必须先建表再发布（应用列表也读取录制表）。上传先进入 Redis DB 5，后台使用 Bull 批量写入 MySQL，详见 [异步入库](ingestion.md)。
 
 默认表的授权示例，替换为部署中实际库、表和运行账号：
 
 ```sql
-GRANT SELECT, INSERT ON weils_monitor.event_record TO monitor_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON weils_monitor.event_record TO 'monitor'@'localhost';
 ```
 
 查询继续使用 `MONITOR_DASHBOARD_TOKEN`。未配置返回 404，令牌错误返回 401。上传与普通事件上报一样为公开采集入口；由部署侧限制来源和流量，不要将管理令牌放到 SDK。现有 nginx /api 代理及 CORS 规则同时覆盖新接口。
@@ -46,23 +46,23 @@ GRANT SELECT, INSERT ON weils_monitor.event_record TO monitor_runtime;
 
 完整序列为 `JSON.stringify(events)` 的 UTF-8 字节经 gzip 再 base64。按 256KiB 字符边界切片（4 字符对齐），最后一片可不足长度；只有拼接完整字符串后才能解压。短片段使用同一协议，chunk_count=1、chunk_index=0。
 
-成功写入 ClickHouse 后以 HTTP 200 返回（下面校验值是占位说明，真实响应原样使用请求的 64 位小写校验值）：
+成功进入 Redis 缓冲后以 HTTP 200 返回（下面校验值是占位说明，真实响应原样使用请求的 64 位小写校验值）：
 
 ```json
 { "ok": true, "record_id": "81111111-1111-4111-8111-111111111111", "chunk_index": 0, "chunk_checksum": "64位SHA256" }
 ```
 
-校验失败 400、请求体过大 413、写入失败 500。客户端必须核对回执三项后再推进；网络超时重传使用完全相同的 ID、序号和内容。
+校验失败 400、请求体或缓冲预算超限 413、Redis 不可用或无法接收 503。回执确认 Redis 接收，后台 MySQL 入库具有延迟；消费者故障会保留在途批次并重试。过载淘汰可能造成缺片。客户端必须核对回执三项后再推进；网络超时重传使用完全相同的 ID、序号和内容。
 
 ## 表结构与去重
 
 `event_record` 每片一行，应用、会话、用户、路由、起止时间、错误 ID、分片序号为可查询列；其余上下文放在 metadata JSON 字符串，payload 保存客户端编码结果。
 
-引擎 ReplacingMergeTree(received_at)，按开始时间的月份分区，排序键 `(app_id, record_id, chunk_index, variant_hash)`。variant_hash 根据规范化元信息和片校验值生成：相同内容的重传可替换，不同内容的冲突必须保留，避免后台合并掩盖损坏。读取使用 FINAL 按物理版本去重，再按录制统计逻辑片号。
+引擎为 InnoDB，唯一约束 `(app_id, record_id, chunk_index, variant_hash)`。variant_hash 根据规范化元信息和片校验值生成：相同重试通过 ON DUPLICATE KEY UPDATE 对同一哈希做无操作更新，不同内容的冲突独立保存。读取按录制统计不同片号、变体数和元数据版本，无须 FINAL 或后台合并。筛选任一变体后仍保留该录制的其他冲突证据。
 
 - complete：元信息一致、每个片号只有一个版本且总片数齐全。
 - incomplete：尚未收齐。
-- corrupt：元信息或同片内容出现冲突，保留到 TTL 到期。
+- corrupt：元信息或同片内容出现冲突，保留到 保留期结束。
 
 上传接受乱序；冲突上传仍写入以保存证据，管理端拒绝播放。浏览器另外校验整包 SHA-256、大小及事件格式；后端不解压验证录制内容。录制不加入原有六类事件统计；只有录制的应用也会出现在应用列表，事件数不计入分片。
 
@@ -75,9 +75,9 @@ GRANT SELECT, INSERT ON weils_monitor.event_record TO monitor_runtime;
 | GET /records | records、total、hasMore；hours=1/6/24/72/168，limit 默认20/最大100、offset、user_id、session_id、route、error_id |
 | GET /records/:recordId | record 元信息、status、received_chunks；不存在/过期404 |
 | GET /records/:recordId/chunks | chunks、total、hasMore；limit 默认4/最大16、offset；缺片或损坏409 |
-| GET /errors/:eventId/records | 精确错误关联，查询近30天，支持limit/offset |
+| GET /errors/:eventId/records | 精确错误关联，查询保留窗口（默认14天），支持limit/offset |
 
-列表与详情不返回 payload；详情和分片必须分开请求。列表筛选 `user_id`、`session_id` 和 `route` 为精确匹配，按录制 `started_at` 的所选时间范围查询，按开始时间倒序。`offset` 默认 0，上限 100000；分片 `offset` 上限 64。错误关联接口固定查近 30 天，复用列表 `limit` / `offset`（默认 20 / 0），而不是工作台当前时间范围。
+列表与详情不返回 payload；详情和分片必须分开请求。列表筛选 `user_id`、`session_id` 和 `route` 为精确匹配，按录制 `started_at` 的所选时间范围查询，按开始时间倒序。`offset` 默认 0，上限 100000；分片 `offset` 上限 64。错误关联接口查询配置的保留窗口，默认 14 天，复用列表 `limit` / `offset`（默认 20 / 0），而不是工作台当前时间范围。
 
 响应外层均含 `ok: true`。列表返回 `records`、`total`、`limit`、`offset`、`hasMore`；错误关联返回 `records`、`total`，不额外返回 `hasMore`；详情返回 `record`；分片返回 `chunks`、`total`、`hasMore`。摘要包含 `RecordMetadata`、`status` 和 `received_chunks`。
 
@@ -94,21 +94,22 @@ curl "http://localhost:8888/api/v1/dashboard/records?app_id=vue-example&hours=24
 | --- | --- |
 | 根本没有录制请求 | SDK 是否开启、是否命中会话采样、是否触发受支持错误、是否已等待后置窗口；普通事件 `/monitor` 成功不能证明录制已开启 |
 | 上传 400 / 413 | JSON、协议字段、UUID、时间范围、分片长度、base64 / gzip 前缀及片校验值；512KiB 独立请求体上限 |
-| 上传 500 | ClickHouse 连接、录制表是否创建、INSERT 权限 |
+| 上传 503 / 异步写入失败 | 检查 Redis 连接与容量；GET /api/v1/dashboard/ingestion 检查积压和重试，检查 MySQL 表与运行账号权限 |
 | HTTP 200 但客户端重试 | 响应必须包含匹配的录制 ID、片号、片校验值与 `ok: true` |
 | 查询 401 / 404 | 令牌无效 / 查询未启用，或录制在当前应用下不存在、已过期 |
 | 分片查询 409 | 录制 `incomplete` 或 `corrupt`，等待剩余分片或检查冲突来源；上传冲突本身仍可能返回 200 |
 | 列表为空 | 检查 `app_id`、开始时间范围、精确匹配筛选及 SDK 的上传状态 |
 
-TTL 以录制开始时间计算，由 ClickHouse 后台清理，并非到期瞬间必定消失。SDK 待传默认保留 24 小时，不等于后端 30 天 TTL。
+保留期从录制开始时间计算，服务启动后及每小时分批清理早于配置保留窗口截止点的行（默认保留当前 UTC 日及此前 13 天）；不是精确到期删除，服务停机期间不清理。SDK 待传默认保留 24 小时，是另一独立期限。
 
 ## 验证
 
 ```bash
-npm test -- --runInBand
-npm run test:replay:clickhouse
+npm test
+npm run typecheck
+npm run build
+npm run test:mysql
+npm run test:ingestion
 ```
 
-最后一项是当前 Windows + WSL Ubuntu 开发环境的显式集成测试：从 `.env` 读取 ClickHouse 登录信息，通过 WSL 的 clickhouse client 连接，创建随机 `replay_test_<UUID>` 数据库并在结束时只删除该临时库；不会清空实际监控表。覆盖真实建表、乱序上传、去重、错误关联、隔离与 OPTIMIZE FINAL 后的冲突保持，还会启动临时 Vite 服务和 Chromium，验证 SDK 自动错误关联 → 实际入库 → 大屏错误详情 → 解码播放的完整链路。运行前先在同级 SDK 执行 pnpm build，并安装前端开发依赖及 Playwright Chromium；测试使用 5188 和 8877 端口。
-
-当前脚本的 WSL 发行版默认 `Ubuntu`，可用 `REPLAY_CLICKHOUSE_WSL` 覆盖；ClickHouse 二进制路径固定为 `/home/administrator/.local/bin/clickhouse`，其他机器需先适配该测试入口。普通 `npm test` 使用数据层替身，不要求上述真实数据库环境。
+普通测试使用 TypeORM DataSource 替身，不连接数据库。test:mysql 从 .env / 进程环境读取 MYSQL_*，用管理员账号创建随机 monitor_test_<UUID> 数据库，执行完只删除该库，不修改现有监控表。测试覆盖版本迁移及重复执行、六类事件、聚合和 P75、中文与特殊字符搜索、分页、隔离、乱序分片、并发重传、冲突保存、错误关联、分片重组及分批清理边界；不依赖 WSL、Vite 或 Chromium。

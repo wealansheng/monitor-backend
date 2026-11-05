@@ -1,3 +1,4 @@
+/** Source Map 上传工具：扫描构建目录、组装请求并在成功后按需删除文件。 */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
@@ -30,6 +31,7 @@ export async function prunePublicMaps(directory: string): Promise<void> {
   }
 }
 
+/** 批量上传构建目录时使用的地址、版本与清理选项。 */
 export interface UploadDirectoryOptions {
   directory: string;
   kind: SourceMapKind;

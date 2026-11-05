@@ -1,3 +1,4 @@
+/** 工作台查询与消费控制鉴权：校验 Bearer 令牌，未配置时隐藏管理接口。 */
 import {
   CanActivate,
   ExecutionContext,
@@ -10,10 +11,10 @@ import type { Request } from 'express';
 
 import { matchesBearerToken } from '../common/security/bearer-token.util';
 import { MONITOR_CONFIG } from '../config/config.constants';
-import { MonitorConfig } from '../config/config.types';
+import type { MonitorConfig } from '../config/config.types';
 
 /**
- * 监控工作台只读接口的令牌校验。
+ * 监控工作台查询及立即入库接口的令牌校验。
  *
  * 未配置 `MONITOR_DASHBOARD_TOKEN` 时整个管理接口都不对外存在，
  * 因此返回 404 而不是 401，与旧实现“未配置则不挂载路由”的表现一致。
@@ -22,6 +23,7 @@ import { MonitorConfig } from '../config/config.types';
 export class DashboardTokenGuard implements CanActivate {
   constructor(@Inject(MONITOR_CONFIG) private readonly config: MonitorConfig) {}
 
+  /** 未配置令牌时返回 404；已配置时校验 Bearer 头，失败返回 401。 */
   canActivate(context: ExecutionContext): boolean {
     const { token } = this.config.dashboard;
     if (!token) {

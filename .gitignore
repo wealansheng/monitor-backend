@@ -1,7 +1,13 @@
+# 本机安装的依赖，由 package-lock.json 锁定并重新安装。
 node_modules/
+# TypeScript 编译产物，不作为业务源代码提交。
 dist/
+# Jest 生成的覆盖率报告。
 coverage/
+# 本地环境变量含数据库、Redis 和管理令牌，仅保留在本机。
 .env
+# npm 的本地调试日志。
 npm-debug.log*
+# 私有 Source Map 目录，避免把构建源码与映射上传到代码仓库。
 data/sourcemaps/
 mapdata/

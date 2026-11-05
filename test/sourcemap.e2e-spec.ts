@@ -1,3 +1,4 @@
+/** Source Map HTTP 与上传工具回归：验证权限隔离、私有文件及上传清理。 */
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import type { AddressInfo } from 'node:net';
@@ -38,19 +39,23 @@ const errorEvent: ErrorEventRow = {
   colno: 0,
 };
 
+/** 创建测试独享的临时 Source Map 目录，避免读写真实上传目录。 */
 async function createTemporaryDirectory(prefix: string): Promise<string> {
   return mkdtemp(path.join(tmpdir(), prefix));
 }
 
+/** 验证Source Map 管理接口。 */
 describe('Source Map 管理接口', () => {
   let app: NestExpressApplication;
   let directory: string;
 
+  /** 检查并清理本用例状态，恢复模拟对象或隔离资源。 */
   afterEach(async () => {
     await app?.close();
     if (directory) await rm(directory, { recursive: true, force: true });
   });
 
+  /** 验证工作台令牌只读源码，不能上传 map，原始文件不可下载。 */
   it('工作台令牌只读源码，不能上传 map，原始文件不可下载', async () => {
     directory = await createTemporaryDirectory('monitor-private-maps-');
     const findError = jest.fn(async (requestedApp: string) => requestedApp === appId ? errorEvent : null);
@@ -78,6 +83,7 @@ describe('Source Map 管理接口', () => {
     expect(upload.body.created).toBe(true);
   });
 
+  /** 验证需要令牌，上传后即可还原错误堆栈，且不影响上报接口。 */
   it('需要令牌，上传后即可还原错误堆栈，且不影响上报接口', async () => {
     directory = await createTemporaryDirectory('monitor-sourcemaps-admin-');
     app = await createTestApp({
@@ -123,10 +129,11 @@ describe('Source Map 管理接口', () => {
         app_id: appId,
         action: 'click',
       })
-      .expect(200);
-    expect(monitor.body.ok).toBe(true);
+      .expect(204);
+    expect(monitor.status).toBe(204);
   });
 
+  /** 验证上传接口区分空请求体与非法 JSON。 */
   it('上传接口区分空请求体与非法 JSON', async () => {
     directory = await createTemporaryDirectory('monitor-sourcemaps-body-');
     app = await createTestApp({
@@ -148,17 +155,20 @@ describe('Source Map 管理接口', () => {
   });
 });
 
+/** 验证sourcemaps:upload 脚本。 */
 describe('sourcemaps:upload 脚本', () => {
   let app: NestExpressApplication;
   let directory: string;
   let buildDir: string;
 
+  /** 检查并清理本用例状态，恢复模拟对象或隔离资源。 */
   afterEach(async () => {
     await app?.close();
     if (directory) await rm(directory, { recursive: true, force: true });
     if (buildDir) await rm(buildDir, { recursive: true, force: true });
   });
 
+  /** 验证客户端和服务端全部上传后才清理；上传失败保留 map 并向调用方抛错。 */
   it('客户端和服务端全部上传后才清理；上传失败保留 map 并向调用方抛错', async () => {
     directory = await createTemporaryDirectory('monitor-upload-command-');
     buildDir = await createTemporaryDirectory('monitor-upload-artifacts-');
@@ -169,7 +179,7 @@ describe('sourcemaps:upload 脚本', () => {
     const clientMap = path.join(clientDir, 'app.js.map');
     const serverMap = path.join(serverDir, 'server.mjs.map');
     await writeFile(clientMap, JSON.stringify(map('src/client.ts')));
-    // Invalid server map makes the second upload fail after the client upload succeeds.
+    // 使用损坏的服务端映射，让客户端上传成功后第二次上传失败，验证失败时保留文件。
     await writeFile(serverMap, JSON.stringify({ version: 2 }));
     app = await createTestApp({ env: { SOURCEMAP_ADMIN_TOKEN: token, SOURCEMAP_DIR: directory } });
     await app.listen(0, '127.0.0.1');
@@ -186,6 +196,7 @@ describe('sourcemaps:upload 脚本', () => {
     await expect(access(serverMap)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  /** 验证上传构建产物中的客户端 Source Map，并可清理公开副本。 */
   it('上传构建产物中的客户端 Source Map，并可清理公开副本', async () => {
     directory = await createTemporaryDirectory('monitor-sourcemaps-script-');
     buildDir = await createTemporaryDirectory('monitor-build-');
@@ -228,6 +239,7 @@ describe('sourcemaps:upload 脚本', () => {
     await expect(access(mapFile)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  /** 验证客户端上传缺少 baseUrl 时直接报错。 */
   it('客户端上传缺少 baseUrl 时直接报错', async () => {
     buildDir = await createTemporaryDirectory('monitor-build-guard-');
     await writeFile(path.join(buildDir, 'app.js.map'), JSON.stringify(map('src/app.ts')));

@@ -1,3 +1,4 @@
+/** Source Map 模块：装配私有存储、查询和上传鉴权能力。 */
 import { Module } from '@nestjs/common';
 
 import { MONITOR_CONFIG } from '../config/config.constants';
@@ -7,6 +8,7 @@ import { SourceMapController } from './sourcemap.controller';
 import { SourceMapService } from './sourcemap.service';
 import { SourceMapTokenGuard } from './sourcemap-token.guard';
 
+/** Source Map 模块：装配私有存储、查询和上传鉴权能力。 */
 @Module({
   controllers: [SourceMapController],
   providers: [

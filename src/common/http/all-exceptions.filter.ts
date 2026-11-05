@@ -1,3 +1,4 @@
+/** 统一 HTTP 异常处理：保留明确的状态码并返回稳定的错误 JSON。 */
 import {
   ArgumentsHost,
   Catch,
@@ -15,6 +16,7 @@ interface BodyParserError {
   message?: string;
 }
 
+/** 统一异常响应使用的状态与消息。 */
 interface ResolvedError {
   status: number;
   message: string;
@@ -38,6 +40,7 @@ const UNMATCHED_ROUTE_PATTERN = /^Cannot [A-Z]+ \//;
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger('MonitorException');
 
+  /** 将异常转为统一 JSON 响应，保留适当状态码并记录服务端故障。 */
   catch(exception: unknown, host: ArgumentsHost): void {
     const response = host.switchToHttp().getResponse<Response>();
     const resolved = this.resolve(exception);
@@ -50,6 +53,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     response.status(resolved.status).json({ ok: false, error: resolved.message });
   }
 
+  /** 区分框架 HTTP 异常与未知异常，提取面向客户端的错误信息。 */
   private resolve(exception: unknown): ResolvedError {
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
@@ -75,12 +79,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
     return { status: 500, message: 'Internal Server Error', unexpected: true };
   }
 
+  /** 从解析器或 HTTP 异常中取得有效状态码，其他情况回退为服务器错误。 */
   private statusOf(error: BodyParserError | null | undefined): number {
     if (typeof error?.statusCode === 'number') return error.statusCode;
     if (typeof error?.status === 'number') return error.status;
     return 500;
   }
 
+  /** 将不同形状的异常消息转换为字符串；字段错误数组只取第一条。 */
   private messageOf(exception: HttpException): string {
     const payload = exception.getResponse();
 

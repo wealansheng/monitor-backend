@@ -1,3 +1,4 @@
+/** 全局配置模块：读取根目录 .env，生成经过校验的运行配置。 */
 import { Global, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 

@@ -1,226 +1,72 @@
-import {
-  ClickHouseClientPort,
-  ClickHouseQueryParams,
-} from '../src/database/clickhouse-client.port';
+/** 事件持久层回归：验证参数化查询、指纹、数字转换和内部字段隐藏。 */
+import { createHash } from 'node:crypto';
 import { MonitorRepository } from '../src/database/monitor.repository';
+import { createDataSourceStub, createTestConfig } from './support/test-app';
+import { normalizeRow } from '../src/database/data-source';
 
-const TABLES = {
-  performance: 'frontend_performance',
-  error: 'frontend_error',
-  behavior: 'frontend_behavior',
-};
-
-/** 记录每次查询参数的客户端替身。 */
-function createQueryCapture(rowsFor: (params: ClickHouseQueryParams) => unknown[]) {
-  const queries: ClickHouseQueryParams[] = [];
-  const client: ClickHouseClientPort = {
-    command: async () => undefined,
-    insert: async () => undefined,
-    query: async (params: ClickHouseQueryParams) => {
-      queries.push(params);
-      return { json: async () => rowsFor(params) as never[] };
-    },
-    close: async () => undefined,
-  };
-  return { client, queries };
-}
-
-function createRepository(client: ClickHouseClientPort, database = 'weils_monitor') {
-  return new MonitorRepository({ client, database, tables: TABLES });
-}
-
-describe('MonitorRepository', () => {
-  it('创建表并批量写入 ClickHouse', async () => {
-    const createQueries: string[] = [];
-    let insertParams: Record<string, unknown> | undefined;
-    const client: ClickHouseClientPort = {
-      command: async ({ query }) => {
-        createQueries.push(query);
-      },
-      insert: async (params) => {
-        insertParams = params as unknown as Record<string, unknown>;
-      },
-      query: async () => ({ json: async () => [] }),
-      close: async () => undefined,
-    };
-    const repository = createRepository(client);
-
-    await repository.initialize();
-    await repository.insertMany('error', [{ event_id: 'id-1' }, { event_id: 'id-2' }]);
-
-    expect(createQueries).toHaveLength(16);
-    expect(createQueries.some((query) => query.includes("ADD COLUMN IF NOT EXISTS stack_frames String DEFAULT '[]'"))).toBe(true);
-    expect(createQueries[0]).toMatch(/CREATE DATABASE IF NOT EXISTS `weils_monitor`/);
-    expect(createQueries[1]).toMatch(
-      /CREATE TABLE IF NOT EXISTS `weils_monitor`\.`frontend_performance`/,
-    );
-    expect(
-      createQueries.some((query) =>
-        /CREATE TABLE IF NOT EXISTS `weils_monitor`\.`frontend_error`/.test(query),
-      ),
-    ).toBe(true);
-    expect(
-      createQueries.some((query) =>
-        /CREATE TABLE IF NOT EXISTS `weils_monitor`\.`frontend_behavior`/.test(query),
-      ),
-    ).toBe(true);
-    expect(
-      createQueries.some((query) =>
-        /ALTER TABLE `weils_monitor`\.`frontend_behavior`[\s\S]*ADD COLUMN IF NOT EXISTS sample_rate/.test(
-          query,
-        ),
-      ),
-    ).toBe(true);
-
-    for (const table of ['frontend_performance', 'frontend_error', 'frontend_behavior']) {
-      expect(
-        createQueries.some(
-          (query) =>
-            query.includes(`CREATE TABLE IF NOT EXISTS \`weils_monitor\`.\`${table}\``) &&
-            query.includes("project_name LowCardinality(String) DEFAULT ''"),
-        ),
-      ).toBe(true);
-      expect(
-        createQueries.some(
-          (query) =>
-            query.includes(`ALTER TABLE \`weils_monitor\`.\`${table}\``) &&
-            query.includes("ADD COLUMN IF NOT EXISTS project_name LowCardinality(String) DEFAULT ''"),
-        ),
-      ).toBe(true);
+/** 验证普通事件 Repository 的 SQL 与响应兼容。 */
+describe('MySQL event repository', () => {
+  /** 验证关键词中特殊字符按字面匹配，值参数绑定且仅查询选中类别。 */
+  it('keeps keyword characters literal and values parameterized, scans only the selected category', async () => {
+    const source = createDataSourceStub();
+    const calls: { sql: string; params: unknown[] }[] = [];
+    source.query = jest.fn(async (sql: string, params: unknown[] = []) => {
+      calls.push({ sql, params });
+      return sql.includes('COUNT(*) AS total') ? [{ total: '7' }] : [{ eventId: 'e', timestamp: '1712345678901' }];
+    }) as typeof source.query;
+    const repository = new MonitorRepository(source, createTestConfig().mysql);
+    const keyword = "白屏_%'\\";
+    const result = await repository.findDashboardEvents({
+      appId: "app' OR 1=1", from: 1, to: 2, eventType: 'error', keyword, limit: 20, offset: 40,
+    });
+    expect(result).toEqual({ events: [{ eventId: 'e', timestamp: 1712345678901 }], total: 7 });
+    expect(calls).toHaveLength(2);
+    for (const { sql, params } of calls) {
+      expect(sql).toContain('frontend_error');
+      expect(sql).not.toContain('frontend_behavior');
+      expect(sql).not.toContain(keyword);
+      expect(sql).not.toContain("app' OR 1=1");
+      expect(sql).toContain('LOCATE(LOWER(?)');
+      expect(params).toEqual(expect.arrayContaining([keyword, "app' OR 1=1", 'error']));
     }
-
-    expect(
-      createQueries.some((query) =>
-        /ALTER TABLE `weils_monitor`\.`frontend_performance`[\s\S]*MODIFY COLUMN start_time Float64/.test(
-          query,
-        ),
-      ),
-    ).toBe(true);
-
-    expect(insertParams).toEqual({
-      table: '`weils_monitor`.`frontend_error`',
-      values: [{ event_id: 'id-1' }, { event_id: 'id-2' }],
-      format: 'JSONEachRow',
-      clickhouse_settings: {
-        input_format_defaults_for_omitted_fields: 1,
-      },
-    });
+    expect(calls[1].sql).toContain('LIMIT 1');
+    await expect(repository.findDashboardEvents({
+      appId: 'a', from: 1, to: 2, eventType: 'toString', keyword: '', limit: 1, offset: 0,
+    })).rejects.toThrow('不支持的事件类型');
   });
 
-  it('事件分页查询下推类型过滤、支持关键字与总数', async () => {
-    const { client, queries } = createQueryCapture((params) =>
-      /count\(\) AS total/.test(params.query)
-        ? [{ total: '7' }]
-        : [{ eventId: 'e-1', eventType: 'error' }],
-    );
-    const repository = createRepository(client);
-
-    const page = await repository.findDashboardEvents({
-      appId: 'vue-example',
-      from: 100,
-      to: 200,
-      eventType: 'error',
-      keyword: '白屏',
-      limit: 20,
-      offset: 40,
-    });
-
-    expect(page).toEqual({ events: [{ eventId: 'e-1', eventType: 'error' }], total: 7 });
-    expect(queries).toHaveLength(2);
-
-    const [pageQuery, countQuery] = queries;
-    expect(pageQuery.query).toMatch(/FROM `weils_monitor`\.`frontend_error`/);
-    expect(pageQuery.query).not.toContain('frontend_behavior');
-    expect(pageQuery.query).not.toContain('frontend_performance');
-    expect(pageQuery.query).toMatch(/event_type = \{eventType:String\}/);
-    expect(pageQuery.query).toMatch(/positionCaseInsensitiveUTF8/);
-    expect(pageQuery.query).toMatch(/LIMIT \{limit:UInt32\} OFFSET \{offset:UInt32\}/);
-    expect(pageQuery.query_params).toEqual({
-      appId: 'vue-example',
-      from: 100,
-      to: 200,
-      limit: 20,
-      offset: 40,
-      eventType: 'error',
-      keyword: '白屏',
-    });
-    expect(countQuery.query).toMatch(/count\(\) AS total/);
-    expect(countQuery.query).toMatch(/positionCaseInsensitiveUTF8/);
-    expect(countQuery.query).not.toContain('LIMIT');
-
-    queries.length = 0;
-    await repository.findDashboardEvents({
-      appId: 'portal',
-      from: 1,
-      to: 2,
-      eventType: undefined,
-      keyword: '',
-      limit: 20,
-      offset: 0,
-    });
-    expect(queries[0].query).toMatch(/frontend_error/);
-    expect(queries[0].query).toMatch(/frontend_behavior/);
-    expect(queries[0].query).toMatch(/frontend_performance/);
-    expect(queries[0].query).not.toContain('event_type = {eventType:String}');
-    expect(queries[0].query).not.toContain('positionCaseInsensitiveUTF8');
-
-    await expect(
-      repository.findDashboardEvents({
-        appId: 'portal',
-        from: 1,
-        to: 2,
-        eventType: 'click',
-        keyword: '',
-        limit: 1,
-        offset: 0,
-      }),
-    ).rejects.toThrow(/不支持的事件类型/);
+  /** 验证错误指纹输入规则，以及普通事件 UUID 重复仍追加。 */
+  it('computes error fingerprints and retains duplicate ordinary event UUIDs', async () => {
+    const source = createDataSourceStub();
+    const insert = jest.fn(async (_rows: unknown) => undefined);
+    const builder = {insert:()=>builder,values:(_rows:unknown)=>{insert(_rows);return builder;},orUpdate:()=>builder,execute:async()=>undefined};
+    source.getRepository = jest.fn(() => ({ createQueryBuilder:()=>builder })) as unknown as typeof source.getRepository;
+    const repository = new MonitorRepository(source, createTestConfig().mysql);
+    const rows = [{ event_id: 'same', error_type: 'js', name: 'Error', message: 'failure', filename: 'app.js' },
+      { event_id: 'same', fingerprint: 'custom' }];
+    await repository.insertMany('error', rows);
+    expect(insert.mock.calls[0]).toEqual([[
+      { ...rows[0], ingest_id: expect.any(String), fingerprint_hash: createHash('sha256').update('js|Error|failure|app.js').digest('hex') },
+      { ...rows[1], ingest_id: expect.any(String), fingerprint_hash: createHash('sha256').update('custom').digest('hex') },
+    ]]);
   });
 
-  it('单条事件详情按候选表依次查找并返回所属表', async () => {
-    const { client, queries } = createQueryCapture((params) =>
-      params.query.includes('frontend_error') ? [] : [{ event_id: 'e-9', action: 'click' }],
-    );
-    const repository = createRepository(client);
-
-    const found = await repository.findDashboardEvent({ appId: 'vue-example', eventId: 'e-9' });
-    expect(queries).toHaveLength(2);
-    expect(queries[0].query).toMatch(
-      /SELECT \*, toString\(fingerprint_hash\) AS fingerprint_hash FROM `weils_monitor`\.`frontend_error`/,
-    );
-    expect(queries[1].query).toMatch(/SELECT \* FROM `weils_monitor`\.`frontend_behavior`/);
-    expect(queries[1].query_params).toEqual({ appId: 'vue-example', eventId: 'e-9' });
-    expect(found).toEqual({ category: 'behavior', event: { event_id: 'e-9', action: 'click' } });
-
-    queries.length = 0;
-    const typed = await repository.findDashboardEvent({
-      appId: 'vue-example',
-      eventId: 'e-9',
-      eventType: 'performance',
-    });
-    expect(queries).toHaveLength(1);
-    expect(queries[0].query).toMatch(/`weils_monitor`\.`frontend_performance`/);
-    expect(typed?.category).toBe('performance');
-
-    queries.length = 0;
-    const absent = await repository.findDashboardEvent({
-      appId: 'vue-example',
-      eventId: 'e-9',
-      eventType: 'stability',
-    });
-    expect(queries).toHaveLength(1);
-    expect(queries[0].query).toMatch(/`weils_monitor`\.`frontend_error`/);
-    expect(absent).toBeNull();
+  /** 验证数值字段转换，不改变标识符、哈希与 JSON 字符串。 */
+  it('normalizes numeric data without coercing identifiers, hashes or JSON strings', () => {
+    expect(normalizeRow({ id: '9', timestamp: '9007199254740991', sample_rate: 0.2,
+      fingerprint_hash: '0000123', event_id: '123', stack_frames: '[]', tags: '{"a":"b"}' }))
+      .toEqual({ timestamp: Number.MAX_SAFE_INTEGER, sample_rate: 0.2,
+        fingerprint_hash: '0000123', event_id: '123', stack_frames: '[]', tags: { a: 'b' } });
   });
 
-  it('按应用与事件 ID 参数化查询单条错误事件', async () => {
-    const { client, queries } = createQueryCapture(() => [{ event_id: 'e-1' }]);
-    const repository = createRepository(client, 'weils_monitor');
-
-    const event = await repository.findError('web-portal', 'e-1');
-
-    expect(event).toEqual({ event_id: 'e-1' });
-    expect(queries[0].query_params).toEqual({ appId: 'web-portal', eventId: 'e-1' });
-    expect(queries[0].query).toMatch(/FROM `weils_monitor`\.`frontend_error`/);
+  /** 验证详情依次查表并隐藏内部主键。 */
+  it('searches event detail categories in order and never exposes the internal key', async () => {
+    const source = createDataSourceStub();
+    const findOne = jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ id: '1', action: 'click', timestamp: '10' });
+    source.getRepository = jest.fn(() => ({ findOne })) as unknown as typeof source.getRepository;
+    const result = await new MonitorRepository(source, createTestConfig().mysql).findDashboardEvent({ appId: 'a', eventId: 'ABC' });
+    expect(result).toEqual({ category: 'behavior', event: { action: 'click', timestamp: 10 } });
+    expect(findOne.mock.calls[0][0].where).toMatchObject({ app_id: 'a', event_id: 'abc' });
+    expect(findOne.mock.calls[0][0].where.timestamp).toBeDefined();
   });
 });

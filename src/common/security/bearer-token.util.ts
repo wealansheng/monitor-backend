@@ -1,3 +1,4 @@
+/** 共享令牌校验工具：解析 Bearer 头并使用恒定时间比较。 */
 import { timingSafeEqual } from 'node:crypto';
 
 /**

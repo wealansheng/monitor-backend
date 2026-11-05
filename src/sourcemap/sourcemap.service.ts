@@ -1,3 +1,4 @@
+/** Source Map 服务：私有文件存储、映射缓存与错误堆栈源码还原。 */
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -29,15 +30,18 @@ import {
 /** 内存中同时缓存的 Source Map 数量上限。 */
 const MAX_CACHED_MAPS = 20;
 
+/** 源码映射服务依赖的私有存储目录与错误查询 Repository。 */
 export interface SourceMapServiceOptions {
   directory: string;
   repository: MonitorRepository;
 }
 
+/** 成功写入 Source Map 后返回的产物信息。 */
 export interface UploadResult extends SourceMapIdentity {
   created: boolean;
 }
 
+/** 映射后的堆栈帧，同时保留原始位置和可用源码片段。 */
 export interface SymbolicatedFrame {
   raw: string;
   label: string;
@@ -47,6 +51,7 @@ export interface SymbolicatedFrame {
   context?: { start_line: number; lines: string[] };
 }
 
+/** 单个错误的源码还原结果与可诊断的映射状态。 */
 export interface SymbolicationResult {
   event_id: string;
   app_id: string;
@@ -80,6 +85,7 @@ export class SourceMapService {
     this.repository = repository;
   }
 
+  /** 验证 Source Map 内容并按应用、版本、构建路径写入私有存储。 */
   async upload(input: unknown): Promise<UploadResult> {
     if (!input || typeof input !== 'object' || Array.isArray(input)) {
       throw new BadRequestException('JSON body must be an object');
@@ -149,6 +155,7 @@ export class SourceMapService {
     return { ...identity, created: true };
   }
 
+  /** 读取应用隔离的错误事件，按结构化或原始堆栈匹配映射并返回源码位置。 */
   async symbolicate(appId: unknown, eventId: unknown): Promise<SymbolicationResult> {
     if (typeof appId !== 'string' || !appId.trim()) {
       throw new BadRequestException('app_id is required');
@@ -238,7 +245,7 @@ export class SourceMapService {
       return { raw: frame.raw, label: frame.label, generated, status: 'no_mapping' };
     }
 
-    // Read only embedded source content. Never fetch sources or read source paths from disk.
+    // 只读取映射内嵌的源码内容，不请求外部地址，也不按映射路径读取本地文件。
     const content = sourceContentFor(map, original.source);
     const sourceLines = typeof content === 'string' ? content.split(/\r?\n/) : [];
     const start = Math.max(0, original.line - 6);
@@ -262,6 +269,7 @@ export class SourceMapService {
     };
   }
 
+  /** 加载指定构建文件的映射，复用已解析的缓存。 */
   private async loadMap(identity: SourceMapIdentity): Promise<TraceMap | null> {
     const key = keyFor(identity);
     const cached = this.cache.get(key);
@@ -277,6 +285,7 @@ export class SourceMapService {
     }
   }
 
+  /** 读取并解析私有映射文件；缺失时返回空值，其他读取或解析错误继续抛出。 */
   private async readMap(key: string): Promise<TraceMap | null> {
     let content: string;
     try {

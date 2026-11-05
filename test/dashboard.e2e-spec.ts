@@ -1,3 +1,4 @@
+/** 工作台 HTTP 回归：验证鉴权、查询参数、分页与详情响应。 */
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 
@@ -20,13 +21,16 @@ const EMPTY_OVERVIEW = {
   recentEvents: [],
 };
 
+/** 验证监控工作台聚合查询。 */
 describe('监控工作台聚合查询', () => {
   let app: NestExpressApplication;
 
+  /** 检查并清理本用例状态，恢复模拟对象或隔离资源。 */
   afterEach(async () => {
     await app?.close();
   });
 
+  /** 验证要求令牌，并校验查询范围。 */
   it('要求令牌，并校验查询范围', async () => {
     app = await createTestApp({
       env: { MONITOR_DASHBOARD_TOKEN: TOKEN },
@@ -79,6 +83,7 @@ describe('监控工作台聚合查询', () => {
     expect(response.body.appId).toBe('portal');
   });
 
+  /** 验证事件明细支持按类型、关键字与分页查询。 */
   it('事件明细支持按类型、关键字与分页查询', async () => {
     const calls: DashboardEventsParams[] = [];
     app = await createTestApp({
@@ -173,6 +178,7 @@ describe('监控工作台聚合查询', () => {
     });
   });
 
+  /** 验证事件详情按 event_id 查询，并区分参数错误与未找到。 */
   it('事件详情按 event_id 查询，并区分参数错误与未找到', async () => {
     const calls: Array<{ appId: string; eventId: string; eventType?: string }> = [];
     app = await createTestApp({
@@ -233,6 +239,7 @@ describe('监控工作台聚合查询', () => {
     expect(calls.at(-1)?.eventType).toBe('error');
   });
 
+  /** 验证未配置令牌时管理接口返回 404。 */
   it('未配置令牌时管理接口返回 404', async () => {
     app = await createTestApp();
 

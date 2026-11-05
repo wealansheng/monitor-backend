@@ -1,3 +1,4 @@
+/** 自定义真值校验装饰器：兼容 SDK 的必要字段表达方式。 */
 import { registerDecorator, ValidationOptions } from 'class-validator';
 
 /**

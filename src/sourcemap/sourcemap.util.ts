@@ -1,3 +1,4 @@
+/** 堆栈与路径工具：解析浏览器和服务端帧，匹配构建文件并截取源码。 */
 import { createHash } from 'node:crypto';
 
 import { BadRequestException } from '@nestjs/common';
@@ -29,6 +30,7 @@ export interface UnsupportedFrame {
   status: string;
 }
 
+/** 解析后的堆栈帧，保存原始文本及可选文件与位置。 */
 export type StackFrame = LocatedFrame | UnsupportedFrame;
 
 /** 供命中缓存使用的来源版本引用。 */
@@ -37,6 +39,7 @@ export interface FrameArtifact {
   artifact: string;
 }
 
+/** 判断帧是否包含可用于映射的文件和位置。 */
 export function isLocatedFrame(frame: StackFrame): frame is LocatedFrame {
   return (frame as UnsupportedFrame).status === undefined;
 }

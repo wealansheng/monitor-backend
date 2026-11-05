@@ -1,3 +1,4 @@
+/** 构建产物上传命令：读取参数、上传 Source Map 并按选项清理公开副本。 */
 import { prunePublicMaps, uploadDirectory } from './sourcemap/upload-sourcemaps.util';
 
 /**
@@ -52,7 +53,7 @@ export async function uploadSourceMaps(env: NodeJS.ProcessEnv = process.env): Pr
   }
 
   if (count === 0) throw new Error('No JavaScript source maps found');
-  // All uploads must succeed before removing any publicly deployable maps.
+  // 所有上传均成功后才清理可公开部署的映射副本，部分失败时保留全部文件供重试。
   if (clientDir) await prunePublicMaps(clientDir);
   if (serverDir) await prunePublicMaps(serverDir);
 

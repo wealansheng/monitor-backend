@@ -1,3 +1,4 @@
+/** 入口校验管道：解析原始请求体并校验全部事件，防止部分接收。 */
 import { BadRequestException, Injectable, PipeTransform } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -39,6 +40,7 @@ async function assertFieldsValid(
  */
 @Injectable()
 export class MonitorIngestPipe implements PipeTransform<unknown, Promise<MonitorIngestPayload>> {
+  /** 将原始字节请求解析为已全部校验的事件集合，同时保留入口字节数。 */
   async transform(value: unknown): Promise<MonitorIngestPayload> {
     if (!Buffer.isBuffer(value) || value.length === 0) {
       throw new BadRequestException('Empty body');
