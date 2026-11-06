@@ -4,14 +4,16 @@
 # 目标平台：Ubuntu 22.04/24.04、Debian 12（apt + systemd），需 root 执行。
 #
 # 用法：
-#   bash deploy/init.sh                                    # 交互式询问 MySQL root 密码
-#   MYSQL_ROOT_PASSWORD='***' MYSQL_PASSWORD='***' bash deploy/init.sh
+#   bash deploy/init.sh                                    # 交互式询问 MySQL root / Redis 密码
+#   MYSQL_ROOT_PASSWORD='***' MYSQL_PASSWORD='***' REDIS_PASSWORD='***' bash deploy/init.sh
 #   bash deploy/init.sh --check-only                       # 只检查环境，不安装
 #   SKIP_NGINX=1 SKIP_MYSQL=1 bash deploy/init.sh          # 分机部署时跳过组件
 #
 # 约定：
 #   - 配置项集中在下方「配置区」，同名环境变量优先于脚本内默认值。
 #   - 重复执行安全：托管配置块先删除再写入，绝不删除 MySQL/Redis 数据目录。
+#   - Redis 默认强制设置密码（留空先复用 .env 中的值，仍为空则交互询问，
+#     非交互随机生成并打印）；仅 REDIS_ALLOW_NO_PASSWORD=1 时才允许无密码。
 #   - 会创建 root@'%'（MYSQL_ROOT_REMOTE=0 可关闭）与 monitor 账号，并把 MySQL、
 #     Redis 监听在 0.0.0.0。请用云安全组限制来源，不要把 3306/6379 直接暴露公网。
 set -Eeuo pipefail
@@ -33,12 +35,15 @@ NGINX_LISTEN_PORT=${NGINX_LISTEN_PORT:-80}                            # 对外�
 NGINX_TLS_CERT=${NGINX_TLS_CERT:-}                                    # 与 KEY 同时配置才启用 HTTPS
 NGINX_TLS_KEY=${NGINX_TLS_KEY:-}
 NGINX_SITE_NAME=${NGINX_SITE_NAME:-monitor-backend}                   # 生成 /etc/nginx/conf.d/<name>.conf
+NGINX_SERVER_NAME=${NGINX_SERVER_NAME:-_}                             # server_name；填域名后 certbot --nginx 才能自动匹配到本文件
+NGINX_ACME_ROOT=${NGINX_ACME_ROOT:-/var/www/letsencrypt}              # certbot --webroot 的校验目录，续期不必停 nginx
 BACKEND_HOST=${BACKEND_HOST:-127.0.0.1}                               # 反代上游地址
 BACKEND_PORT=${BACKEND_PORT:-}                                        # 留空读 ../.env 的 PORT，再回退 8888
 
 # ---- Redis ----
 REDIS_PORT=${REDIS_PORT:-6379}
-REDIS_PASSWORD=${REDIS_PASSWORD:-}                                    # 留空不设密码（同时关闭 protected-mode）
+REDIS_PASSWORD=${REDIS_PASSWORD:-}                                    # 留空：取 .env → 交互询问 → 随机生成（默认强制设密码）
+REDIS_ALLOW_NO_PASSWORD=${REDIS_ALLOW_NO_PASSWORD:-0}                  # 设为 1 才允许空密码（同时 protected-mode no）
 REDIS_MAXMEMORY=${REDIS_MAXMEMORY:-256mb}                             # 与 docs/ingestion.md 示例一致
 
 # ---- MySQL ----
@@ -76,6 +81,7 @@ NODE_ARCH=''
 MYSQL_VERSION=''
 MYSQL_AUTH_PLUGIN='caching_sha2_password'
 GENERATED_MYSQL_ROOT=0
+GENERATED_REDIS_PASSWORD=0
 TMP_FILES=()
 TMP_DIRS=()
 
@@ -93,9 +99,15 @@ monitor-backend 环境初始化脚本（Ubuntu/Debian，需 root）
   MYSQL_PASSWORD        monitor 账号密码；留空复用 root 密码
   MYSQL_ROOT_REMOTE     1（默认）同时创建 root@'%'；0 只保留 root@'localhost'
   NGINX_LISTEN_PORT     nginx 入口端口，默认 80
+  NGINX_SERVER_NAME     站点域名，默认 _；填域名后 certbot --nginx 能自动匹配本文件
+  NGINX_TLS_CERT        证书链路径（如 /etc/letsencrypt/live/<域名>/fullchain.pem）
+  NGINX_TLS_KEY         私钥路径；与 CERT 同时配置才启用 HTTPS
+  NGINX_ACME_ROOT       certbot --webroot 校验目录，默认 /var/www/letsencrypt
   BACKEND_PORT          反代后端端口；留空读 ../.env 的 PORT，再回退 8888
   REDIS_PORT            Redis 端口，默认 6379
-  REDIS_PASSWORD        Redis 密码；留空不设密码
+  REDIS_PASSWORD        Redis 密码；留空先取 .env 中的值，仍为空则交互询问，
+                        非交互时随机生成并打印（默认必须设密码）
+  REDIS_ALLOW_NO_PASSWORD  设为 1 才允许 Redis 无密码；默认必须设密码
   NODE_VERSION          指定 Node 版本，如 22.22.3；留空自动选最新 v22.x
   SKIP_NODE / SKIP_NGINX / SKIP_REDIS / SKIP_MYSQL   设为 1 跳过对应组件
 
@@ -374,6 +386,15 @@ check_env_file() {
   if [ -n "$redis_port" ] && [ "$redis_port" != "$REDIS_PORT" ]; then
     warn ".env 的 REDIS_PORT=$redis_port 与本次安装的 $REDIS_PORT 不一致"
   fi
+  local redis_pass
+  redis_pass=$(env_value REDIS_PASSWORD)
+  if [ -n "$REDIS_PASSWORD" ]; then
+    if [ -z "$redis_pass" ]; then
+      warn ".env 的 REDIS_PASSWORD 为空，本次会给 Redis 设密码：部署前请把 .env 的 REDIS_PASSWORD 改成与本次一致，否则后端认证失败"
+    elif [ "$redis_pass" != "$REDIS_PASSWORD" ]; then
+      warn '.env 的 REDIS_PASSWORD 与本次安装的 Redis 密码不一致，部署后会连不上 Redis'
+    fi
+  fi
   if [ -n "$mysql_port" ] && [ "$mysql_port" != "$MYSQL_PORT" ]; then
     warn ".env 的 MYSQL_PORT=$mysql_port 与本次安装的 $MYSQL_PORT 不一致"
   fi
@@ -406,8 +427,16 @@ check_node_state() {
 }
 
 # check-only 模式下不生成随机密码，只在安装阶段才决策。
+# 被 SKIP_* 跳过的组件不参与密码决策：既不询问，也不随机生成，更不会打印“已生成”。
 resolve_passwords() {
-  if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+  if [ "$SKIP_MYSQL" -eq 1 ]; then
+    note 'SKIP_MYSQL=1：不改动现有 MySQL 实例、账号与密码'
+  fi
+  if [ "$SKIP_REDIS" -eq 1 ]; then
+    note 'SKIP_REDIS=1：不改动现有 Redis 实例与密码'
+  fi
+
+  if [ "$SKIP_MYSQL" -eq 0 ] && [ -z "$MYSQL_ROOT_PASSWORD" ]; then
     if [ "$CHECK_ONLY" -eq 1 ]; then
       note '未提供 MYSQL_ROOT_PASSWORD（安装阶段会交互询问或随机生成）'
     else
@@ -424,9 +453,38 @@ resolve_passwords() {
     fi
   fi
 
-  if [ -z "$MYSQL_PASSWORD" ] && [ -n "$MYSQL_ROOT_PASSWORD" ]; then
+  if [ "$SKIP_MYSQL" -eq 0 ] && [ -z "$MYSQL_PASSWORD" ] && [ -n "$MYSQL_ROOT_PASSWORD" ]; then
     MYSQL_PASSWORD=$MYSQL_ROOT_PASSWORD
     note '未提供 MYSQL_PASSWORD，monitor 账号复用 root 密码'
+  fi
+  case "$REDIS_ALLOW_NO_PASSWORD" in
+    0|1) ;;
+    *) die 'REDIS_ALLOW_NO_PASSWORD 只能是 0 或 1' ;;
+  esac
+  # 优先复用 .env 里已有的密码：重跑本脚本时不会把现有可用的密码换掉。
+  if [ "$SKIP_REDIS" -eq 0 ] && [ -z "$REDIS_PASSWORD" ]; then
+    local env_redis_password
+    env_redis_password=$(env_value REDIS_PASSWORD)
+    if [ -n "$env_redis_password" ]; then
+      REDIS_PASSWORD=$env_redis_password
+      note "从 $ENV_FILE 读取 REDIS_PASSWORD"
+    fi
+  fi
+  if [ "$SKIP_REDIS" -eq 0 ] && [ -z "$REDIS_PASSWORD" ] && [ "$REDIS_ALLOW_NO_PASSWORD" -eq 0 ]; then
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+      note '未提供 REDIS_PASSWORD（安装阶段会交互询问或随机生成；Redis 默认必须设密码）'
+    else
+      if [ -t 0 ]; then
+        printf '    Redis 密码（不回显，直接回车则随机生成）: ' >&2
+        read -rs REDIS_PASSWORD || true
+        printf '\n' >&2
+      fi
+      if [ -z "$REDIS_PASSWORD" ]; then
+        REDIS_PASSWORD=$(openssl rand -hex 16)
+        GENERATED_REDIS_PASSWORD=1
+        warn "已生成随机 Redis 密码: $REDIS_PASSWORD （请立即记录，并写入 .env 的 REDIS_PASSWORD）"
+      fi
+    fi
   fi
   if [ -z "$MYSQL_USER" ]; then
     die 'MYSQL_USER 不能为空'
@@ -438,11 +496,15 @@ resolve_passwords() {
     *[!A-Za-z0-9_]*) die "MYSQL_DATABASE 只能包含字母、数字和下划线: $MYSQL_DATABASE" ;;
   esac
 
-  check_password MYSQL_ROOT_PASSWORD "${MYSQL_ROOT_PASSWORD:-}"
-  check_password MYSQL_PASSWORD "${MYSQL_PASSWORD:-}"
-  check_password REDIS_PASSWORD "${REDIS_PASSWORD:-}"
+  if [ "$SKIP_MYSQL" -eq 0 ]; then
+    check_password MYSQL_ROOT_PASSWORD "${MYSQL_ROOT_PASSWORD:-}"
+    check_password MYSQL_PASSWORD "${MYSQL_PASSWORD:-}"
+  fi
+  if [ "$SKIP_REDIS" -eq 0 ]; then
+    check_password REDIS_PASSWORD "${REDIS_PASSWORD:-}"
+  fi
 
-  if [ -n "$MYSQL_ROOT_PASSWORD" ] && [ "${#MYSQL_ROOT_PASSWORD}" -lt 8 ]; then
+  if [ "$SKIP_MYSQL" -eq 0 ] && [ -n "$MYSQL_ROOT_PASSWORD" ] && [ "${#MYSQL_ROOT_PASSWORD}" -lt 8 ]; then
     warn 'MySQL 密码短于 8 位，属弱口令：请确保 3306 只对可信网段开放（云安全组）'
   fi
 }
@@ -594,7 +656,9 @@ write_nginx_site() {
     listen_line="listen ${NGINX_LISTEN_PORT} ssl http2;"
     extra_ssl="    ssl_certificate ${NGINX_TLS_CERT};
     ssl_certificate_key ${NGINX_TLS_KEY};
-    ssl_protocols TLSv1.2 TLSv1.3;"
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;"
   else
     listen_line="listen ${NGINX_LISTEN_PORT};"
   fi
@@ -604,7 +668,7 @@ write_nginx_site() {
 # 入口端口 ${NGINX_LISTEN_PORT}，反代 http://${BACKEND_HOST}:${BACKEND_PORT}。
 server {
     ${listen_line}
-    server_name _;
+    server_name ${NGINX_SERVER_NAME};
 ${extra_ssl}
 
     # Source Map 单文件上限默认 30MB，代理层留出余量。
@@ -628,6 +692,13 @@ ${extra_ssl}
     location = /mapdata { return 404; }
     location ^~ /mapdata/ { return 404; }
     location ~* \.map\$ { return 404; }
+
+    # ACME HTTP-01 校验目录：certbot --webroot -w ${NGINX_ACME_ROOT} 使用，不进代理。
+    location ^~ /.well-known/acme-challenge/ {
+        root ${NGINX_ACME_ROOT};
+        default_type text/plain;
+        try_files \$uri =404;
+    }
 
     location / {
         proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
@@ -684,6 +755,10 @@ setup_nginx() {
 
   backup_file "$NGINX_SITE_FILE"
   strip_block "$NGINX_SITE_FILE"
+  if [ ! -d "$NGINX_ACME_ROOT" ]; then
+    mkdir -p "$NGINX_ACME_ROOT"
+    note "已创建 ACME 校验目录 $NGINX_ACME_ROOT（certbot --webroot -w $NGINX_ACME_ROOT）"
+  fi
   write_nginx_site
   disable_default_site_if_conflicting
   check_nginx_conflicts
@@ -755,6 +830,11 @@ setup_redis() {
   strip_block "$REDIS_CONF"
   append_redis_block
   note "已写入托管配置块到 $REDIS_CONF"
+  if [ -n "$REDIS_PASSWORD" ]; then
+    note 'Redis 已启用 requirepass（protected-mode yes）'
+  else
+    warn 'REDIS_ALLOW_NO_PASSWORD=1：Redis 未设密码且 protected-mode no，任何可达客户端都能读写，请确保 6379 只对本机/内网开放'
+  fi
 
   systemctl enable redis-server >/dev/null 2>&1 || warn 'systemctl enable redis-server 失败'
   systemctl restart redis-server
@@ -1111,9 +1191,9 @@ print_summary() {
     printf '         数据目录: %s（CONFIG GET dir）   日志: journalctl -u redis-server\n' "$redis_dir"
     local redis_auth
     if [ -n "$REDIS_PASSWORD" ]; then
-      redis_auth='已设置密码'
+      redis_auth='已设置密码（requirepass + protected-mode yes）'
     else
-      redis_auth='未设密码（protected-mode no）'
+      redis_auth='未设密码（REDIS_ALLOW_NO_PASSWORD=1，protected-mode no）'
     fi
     printf '         端口: %s（CONFIG GET port）   认证: %s\n' "$redis_port" "$redis_auth"
     printf '         maxmemory: %s   maxmemory-policy: noeviction\n' "$REDIS_MAXMEMORY"
@@ -1144,15 +1224,23 @@ print_summary() {
 
   printf '============================================\n'
 
-  if [ "$GENERATED_MYSQL_ROOT" -eq 1 ]; then
+  if [ "$SKIP_MYSQL" -eq 1 ]; then
+    printf 'MySQL 密码: 未改动（SKIP_MYSQL=1，沿用现有实例）\n'
+  elif [ "$GENERATED_MYSQL_ROOT" -eq 1 ]; then
     printf '自动生成的 MySQL root 密码: %s\n' "$MYSQL_ROOT_PASSWORD"
   else
     printf 'MySQL root 密码: ******（由执行者提供，未在脚本中保存）\n'
   fi
-  if [ -n "$REDIS_PASSWORD" ]; then
-    printf 'Redis 密码: ******\n'
+  if [ "$SKIP_REDIS" -eq 1 ]; then
+    printf 'Redis 密码: 未改动（SKIP_REDIS=1，沿用现有实例）\n'
+  elif [ -n "$REDIS_PASSWORD" ]; then
+    if [ "$GENERATED_REDIS_PASSWORD" -eq 1 ]; then
+      printf '自动生成的 Redis 密码: %s\n' "$REDIS_PASSWORD"
+    else
+      printf 'Redis 密码: ******（由执行者提供，未在脚本中保存）\n'
+    fi
   else
-    printf 'Redis 密码: 未设置（bind 0.0.0.0 + protected-mode no，任何可达客户端均可读写）\n'
+    printf 'Redis 密码: 未设置（REDIS_ALLOW_NO_PASSWORD=1，bind 0.0.0.0 + protected-mode no，任何可达客户端均可读写）\n'
   fi
 
   cat <<NEXT_STEP
@@ -1163,8 +1251,9 @@ print_summary() {
        MYSQL_HOST=127.0.0.1  MYSQL_PORT=${MYSQL_PORT}  MYSQL_DATABASE=${MYSQL_DATABASE}
        MYSQL_USERNAME=${MYSQL_USER}  MYSQL_PASSWORD=<本次配置的密码>
        MYSQL_ADMIN_USERNAME=root  MYSQL_ADMIN_PASSWORD=<root 密码>
-       REDIS_HOST=127.0.0.1  REDIS_PORT=${REDIS_PORT}  REDIS_PASSWORD=<见上文>  REDIS_DB=5
+       REDIS_HOST=127.0.0.1  REDIS_PORT=${REDIS_PORT}  REDIS_PASSWORD=<见上文，必填>  REDIS_DB=5
   2) 3306 / 6379 已监听 0.0.0.0：请在云安全组限制来源网段，不要直接暴露公网
+      （Redis 已设密码；.env 的 REDIS_PASSWORD 必须与本次一致，否则后端启动即认证失败）
   3) 部署后端产物后执行：node dist/db-init.js → node dist/main.js
   4) 反代入口：http://<域名或IP>:${NGINX_LISTEN_PORT}/ → http://${BACKEND_HOST}:${BACKEND_PORT}
 NEXT_STEP
